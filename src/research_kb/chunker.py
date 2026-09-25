@@ -44,9 +44,11 @@ def build_evidence_id(
     相同的文件、页码、序号和文本会生成相同 ID；
     文本发生变化时，ID 也会变化。
     """
+    # 通过管道符将其拼成一个字符串
     raw_value = f"{source}|{page_number}|{chunk_index}|{text}"
+    # 通过哈希的方式使相同输入能够得到相同输出
     digest = sha256(raw_value.encode("utf-8")).hexdigest()[:16]
-
+    # text_ 前缀表示这是一条文本证据，后续图表证据可以使用其他前缀。
     return f"text_{digest}"
 
 

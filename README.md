@@ -32,6 +32,7 @@ uv run python scripts\check_cloud_models.py
 - `docs/第二天复盘.md`：PDF 加载、清理、切分和证据 JSON 的复盘笔记。
 - `docs/第三天复盘.md`：Embedding、Milvus Schema、幂等入库和 Top-5 检索复盘。
 - `docs/第四天复盘.md`：结构化问答、引用校验和库内/库外评测复盘。
+- `docs/第1至4天总体框架与二次学习路线.md`：项目总架构、业务流程、代码关系和推荐复习顺序。
 - `docs/学习协作约定.md`：从第二天开始的手写代码、中文注释与 Git 协作方式。
 - `docs/每日复盘模板.md`：每日代码关系、数据流和面试复习模板。
 - `scripts/check_day1.py`：第一天环境检查。

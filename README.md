@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-第五天 Streamlit 演示闭环已经完成：页面可以查看知识库状态、按 PDF 限定检索、进行带引用的问答，并上传新 PDF 完成解析、切分、向量化和 Milvus 幂等入库。
+第六天最小多模态 RAG 闭环已经完成：指定 PDF 页面可以渲染为图片，由视觉模型生成图表描述，再与文本证据一起完成 Embedding、Milvus 检索、带引用问答和原图展示。
 
-当前演示库包含 5 份 AI 基础设施报告、276 条文本证据。来源检索验收通过 5/5，单文件过滤、重复上传去重和 Streamlit 页面检查均已通过。
+当前演示库包含 5 份 AI 基础设施报告、276 条文本证据和 3 条图像证据，共 279 条有效证据。多模态检索和多模态问答均通过 3/3，图像证据重复入库和 Streamlit 原图展示检查通过。
 
 ## 启动网页
 
@@ -32,6 +32,7 @@ scripts/run_streamlit.py
 - 查看 Milvus 当前有效实体数和已入库 PDF。
 - 在全部资料或单份 PDF 范围内提问。
 - 展示回答、证据不足状态、引用页码和证据原文。
+- 区分文本证据与图表证据，并展开显示 PDF 页面原图和视觉描述。
 - 保存当前会话的聊天记录并支持一键清空。
 - 上传不超过 20 MB 的 PDF，并限制单次最多处理 30 页。
 - 通过证据 ID 跳过重复片段，避免重复 Embedding 和重复入库。
@@ -63,11 +64,15 @@ uv run python scripts\check_cloud_models.py
 - `docs/第三天复盘.md`：Embedding、Milvus Schema、幂等入库和 Top-5 检索复盘。
 - `docs/第四天复盘.md`：结构化问答、引用校验和库内/库外评测复盘。
 - `docs/第五天复盘.md`：Streamlit 页面、PDF 上传、幂等入库和第五天验收复盘。
+- `docs/第六天复盘.md`：页面渲染、视觉描述、图像证据入库和多模态问答复盘。
 - `docs/第1至4天总体框架与二次学习路线.md`：项目总架构、业务流程、代码关系和推荐复习顺序。
 - `docs/学习协作约定.md`：从第二天开始的手写代码、中文注释与 Git 协作方式。
 - `docs/每日复盘模板.md`：每日代码关系、数据流和面试复习模板。
 - `scripts/check_day1.py`：第一天环境检查。
 - `scripts/run_streamlit.py`：供 PyCharm 普通运行按钮使用的 Streamlit 启动入口。
+- `scripts/render_chart_pages.py`：渲染首轮三张 PDF 图表页。
+- `scripts/describe_chart_pages.py`：调用视觉模型生成可检索的图表描述。
+- `scripts/index_visual_evidence.py`：将图像描述转成向量并写入 Milvus。
 - `src/research_kb`：后续业务代码。
 
 原始 PDF 只保存在本机，不上传 GitHub；仓库通过 `docs/样本资料清单.md` 记录资料来源。

@@ -1,5 +1,8 @@
 """ResearchKB的Streamlit演示页面。"""
 
+from research_kb.page_renderer import (
+    get_page_image_path,
+)
 import streamlit as st
 from research_kb.indexer import EvidenceIndexer
 from research_kb.upload_service import (
@@ -75,9 +78,16 @@ def render_qa_result(result: QAResult) -> None:
         result.citations,
         start=1,
     ):
+        evidence_type = (
+            "图表证据"
+            if citation.content_type == "image"
+            else "文本证据"
+        )
+
         label = (
             f"{index}. {citation.source} · "
             f"PDF第{citation.page_number}页 · "
+            f"{evidence_type} · "
             f"相似度 {citation.score:.4f}"
         )
 
@@ -86,6 +96,28 @@ def render_qa_result(result: QAResult) -> None:
                 citation.evidence_id,
                 language=None,
             )
+
+            if citation.content_type == "image":
+                image_path = get_page_image_path(
+                    source=citation.source,
+                    page_number=citation.page_number,
+                )
+
+                if image_path.is_file():
+                    st.image(
+                        str(image_path),
+                        caption=(
+                            f"{citation.source} "
+                            f"PDF第{citation.page_number}页"
+                        ),
+                    )
+                else:
+                    st.warning(
+                        "本地原图不存在，但视觉描述仍可正常使用。"
+                    )
+
+                st.markdown("**视觉模型描述**")
+
             st.write(citation.text)
 
 
@@ -318,6 +350,7 @@ def main() -> None:
         and entity_count > 0
     )
 
+    # 用户输入的文本
     prompt = st.chat_input(
         placeholder=(
             "请输入AI基础设施行业问题"
@@ -331,7 +364,7 @@ def main() -> None:
 
     if prompt is None:
         return
-
+    # 将用户输入文本转换为问题文本
     question = prompt.strip()
 
     if not question:
@@ -340,6 +373,7 @@ def main() -> None:
 
     # 这是加了一个限定，如果要搜索全部资料，不加filter
     # 不然就要限定来源，即只搜索选中的来源
+    # 限定来源，即只搜索选中的来源
     source_filter = (
         None
         if selected_source == "全部资料"

@@ -134,11 +134,18 @@ class MilvusStore:
 
     def get_entity_count(self) -> int:
         """返回Collection中的实体数量。"""
-        stats = self.client.get_collection_stats(
+        records = self.client.query(
             collection_name=self.collection_name,
+            filter="",
+            # count(*)只统计当前仍可查询的实体，
+            # 不会把等待压缩的已删除数据计算在内。
+            output_fields=["count(*)"],
         )
 
-        return int(stats["row_count"])
+        if not records:
+            return 0
+
+        return int(records[0]["count(*)"])
 
     def get_existing_ids(
         self,
@@ -155,6 +162,7 @@ class MilvusStore:
         if not evidence_ids:
             return set()
 
+        # 拿着一批 ID 去数据库里查，看哪些已经存在。
         records = self.client.query(
             collection_name=self.collection_name,
             ids=evidence_ids,
@@ -183,4 +191,20 @@ class MilvusStore:
         """把已写入的数据持久化。"""
         self.client.flush(
             collection_name=self.collection_name,
+        )
+
+    def list_sources(self) -> list[str]:
+        """返回Collection中所有不重复的PDF文件名。"""
+        records = self.client.query(
+            collection_name=self.collection_name,
+            filter="",
+            limit=16384,
+            output_fields=["source"],
+        )
+
+        return sorted(
+            {
+                record["source"]
+                for record in records
+            }
         )

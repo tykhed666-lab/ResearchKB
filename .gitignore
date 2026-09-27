@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .streamlit/
+.run/
 data/processed/
 data/images/
 data/qa/

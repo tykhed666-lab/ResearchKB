@@ -1,19 +1,27 @@
-"""ResearchKB的Streamlit演示页面。"""
+"""ResearchKB 的 Streamlit 演示页面。"""
 
+from pathlib import Path
+
+import streamlit as st
+
+from research_kb.document_registry import (
+    DocumentMetadata,
+    DocumentRegistry,
+    STATUS_INDEXED,
+)
+from research_kb.embedding_service import EmbeddingService
+from research_kb.indexer import EvidenceIndexer
+from research_kb.milvus_store import MilvusStore
 from research_kb.page_renderer import (
     get_page_image_path,
 )
-import streamlit as st
-from research_kb.indexer import EvidenceIndexer
+from research_kb.qa import QAResult, RAGQuestionAnswerer
+from research_kb.retrieval import MilvusRetriever
+from research_kb.settings import DEFAULT_TOP_K
 from research_kb.upload_service import (
     PdfUploadService,
     UploadReport,
 )
-from research_kb.embedding_service import EmbeddingService
-from research_kb.milvus_store import MilvusStore
-from research_kb.qa import QAResult, RAGQuestionAnswerer
-from research_kb.retrieval import MilvusRetriever
-from research_kb.settings import DEFAULT_TOP_K
 
 # streamlit的页面全局配置
 st.set_page_config(
@@ -22,16 +30,21 @@ st.set_page_config(
     layout="wide",
 )
 
+
 # 创建并缓存数据库、Embedding和问答服务
 @st.cache_resource(show_spinner=False)
 def create_services() -> tuple[
     MilvusStore,
     RAGQuestionAnswerer,
     PdfUploadService,
+    DocumentRegistry,
 ]:
-    """创建并缓存问答与上传服务。"""
+    """创建并缓存问答、上传和文档注册服务。"""
     store = MilvusStore()
-    embedding_service = EmbeddingService()
+
+    embedding_service = (
+        EmbeddingService()
+    )
 
     retriever = MilvusRetriever(
         store=store,
@@ -48,11 +61,21 @@ def create_services() -> tuple[
         embedding_service=embedding_service,
     )
 
+    # SQLite 注册表负责管理一份文档的
+    # 元数据、处理状态和证据数量。
+    registry = DocumentRegistry()
+
     upload_service = PdfUploadService(
         indexer=indexer,
+        registry=registry,
     )
 
-    return store, answerer, upload_service
+    return (
+        store,
+        answerer,
+        upload_service,
+        registry,
+    )
 
 
 def render_qa_result(result: QAResult) -> None:
@@ -142,12 +165,18 @@ def render_message(message: dict) -> None:
         # 渲染助手消息
         render_qa_result(message["result"])
 
+
 def render_upload_report(
     report: UploadReport,
 ) -> None:
     """在侧边栏展示PDF上传和入库结果。"""
     st.success("PDF处理完成")
 
+    if report.duplicate:
+        st.info(
+            "相同内容已经成功入库，"
+            "本次没有重复生成向量。"
+        )
     st.caption(f"保存文件：{report.saved_name}")
 
     first_column, second_column = st.columns(2)
@@ -190,6 +219,7 @@ def render_upload_report(
             "已使用文件哈希自动重命名。"
         )
 
+
 def main() -> None:
     """渲染ResearchKB页面并处理用户问题。"""
     st.title("📚 ResearchKB")
@@ -199,17 +229,45 @@ def main() -> None:
     )
 
     try:
-        store, answerer, upload_service = create_services()
-        entity_count = store.get_entity_count()
-        sources = store.list_sources()
+        (
+            store,
+            answerer,
+            upload_service,
+            registry,
+        ) = create_services()
+
+        entity_count = (
+            store.get_entity_count()
+        )
+
+        # 文档目录改为从 SQLite 读取，
+        # 不再扫描全部 Milvus 向量推断文件列表。
+        documents = (
+            registry.list_documents()
+        )
+
+        # 只有成功入库的文档才能参与检索。
+        sources = [
+            document.saved_name
+            for document in documents
+            if (
+                document.status
+                == STATUS_INDEXED
+            )
+        ]
+
         service_error = None
+
     except Exception as error:
         store = None
         answerer = None
         upload_service = None
+        registry = None
         entity_count = 0
+        documents = []
         sources = []
         service_error = str(error)
+
     # st.sidebar 以下内容全被渲染到左侧边框
     with st.sidebar:
         # 显示标题
@@ -220,8 +278,8 @@ def main() -> None:
             value=entity_count,
         )
         st.metric(
-            label="已入库文档",
-            value=len(sources),
+            label="已登记文档",
+            value=len(documents),
         )
 
         if service_error:
@@ -241,14 +299,41 @@ def main() -> None:
             options=source_options,
         )
 
-        st.markdown("#### 已入库资料")
+        st.markdown(
+            "#### 文档登记簿"
+        )
 
-        if not sources:
-            st.info("当前没有已入库资料。")
+        if not documents:
+            st.info(
+                "当前没有已登记资料。"
+            )
+
         else:
-            # 遍历所有入库资料
-            for source in sources:
-                st.caption(f"• {source}")
+            for document in documents:
+                label = document.title
+
+                if document.ticker:
+                    label += (
+                        f" ({document.ticker})"
+                    )
+
+                st.markdown(
+                    f"**{label}**"
+                )
+
+                st.caption(
+                    f"{document.document_type}"
+                    f" · "
+                    f"{document.industry or '行业未填'}"
+                    f" · 状态 {document.status}"
+                    f" · 文本 {document.text_chunk_count}"
+                    f" · 图像 {document.image_chunk_count}"
+                )
+
+                if document.error_message:
+                    st.error(
+                        document.error_message
+                    )
 
         # PDF上传区域从这里开始。
         st.divider()
@@ -273,6 +358,70 @@ def main() -> None:
             help="单个文件不超过20MB",
         )
 
+        # file_uploader 选中的文件改变时，自动用文件名初始化标题。
+        # 之后用户仍可在输入框中修改标题。
+        current_upload_name = (
+            uploaded_file.name
+            if uploaded_file is not None
+            else None
+        )
+
+        if (
+            st.session_state.get(
+                "upload_metadata_file_name"
+            )
+            != current_upload_name
+        ):
+            st.session_state[
+                "upload_metadata_file_name"
+            ] = current_upload_name
+            st.session_state[
+                "upload_document_title"
+            ] = (
+                Path(current_upload_name).stem
+                if current_upload_name
+                else ""
+            )
+
+        document_title = st.text_input(
+            label="文档标题",
+            key="upload_document_title",
+            help="用于文档目录展示，可与原始文件名不同。",
+        )
+
+        company = st.text_input(
+            label="公司或机构",
+            placeholder="例如：NVIDIA",
+        )
+
+        ticker = st.text_input(
+            label="股票代码",
+            placeholder="例如：NVDA，可不填",
+        )
+
+        industry = st.text_input(
+            label="行业",
+            placeholder="例如：半导体、消费零售",
+        )
+
+        document_type = st.selectbox(
+            label="文档类型",
+            options=[
+                "年报",
+                "季报",
+                "投资者演示",
+                "行业报告",
+                "研报",
+                "其他",
+            ],
+        )
+
+        report_date = st.text_input(
+            label="报告日期",
+            placeholder="YYYY-MM-DD，可不填",
+            help="只填写能够从资料中确认的日期。",
+        )
+
         max_pages = st.number_input(
             label="本次最多处理页数",
             min_value=1,
@@ -288,6 +437,7 @@ def main() -> None:
         upload_disabled = (
             uploaded_file is None
             or upload_service is None
+            or not document_title.strip()
         )
 
         if st.button(
@@ -304,6 +454,14 @@ def main() -> None:
                             file_name=uploaded_file.name,
                             file_bytes=(
                                 uploaded_file.getvalue()
+                            ),
+                            metadata=DocumentMetadata(
+                                title=document_title,
+                                company=company,
+                                ticker=ticker,
+                                industry=industry,
+                                document_type=document_type,
+                                report_date=report_date,
                             ),
                             max_pages=int(max_pages),
                         )

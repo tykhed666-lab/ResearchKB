@@ -13,7 +13,11 @@ from research_kb.indexer import (
 )
 from research_kb.pdf_loader import load_pdf_pages
 from research_kb.text_cleaner import clean_pdf_pages
-
+from research_kb.document_registry import (
+    DocumentMetadata,
+    DocumentRegistry,
+    STATUS_INDEXED,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
@@ -24,9 +28,14 @@ DEFAULT_MAX_PAGES = 30
 
 @dataclass(frozen=True, slots=True)
 class UploadReport:
-    """记录一次PDF上传和入库的结果。"""
+    """记录一次 PDF 上传和入库的结果。"""
 
+    # SQLite documents 表中的业务 ID。
+    document_id: str
+
+    # PDF 在 data/raw 中实际保存的文件名。
     saved_name: str
+
     total_pages: int
     processed_pages: int
     empty_pages: int
@@ -36,6 +45,10 @@ class UploadReport:
     truncated: bool
     renamed: bool
 
+    # True 表示相同内容已经成功入库，
+    # 本次没有重新解析和调用 Embedding。
+    duplicate: bool
+
 
 class PdfUploadService:
     """处理Streamlit上传的PDF文件。"""
@@ -43,99 +56,268 @@ class PdfUploadService:
     def __init__(
         self,
         indexer: EvidenceIndexer,
+        registry: DocumentRegistry,
     ) -> None:
-        """保存证据入库服务。"""
+        """保存证据入库服务和文档注册表。"""
         self.indexer = indexer
+        self.registry = registry
 
     def ingest_pdf(
         self,
         file_name: str,
         file_bytes: bytes,
+        metadata: DocumentMetadata | None = None,
         max_pages: int = DEFAULT_MAX_PAGES,
+        force_reindex: bool = False,
     ) -> UploadReport:
-        """验证、保存、解析并入库一个PDF。
+        """验证、登记、保存、解析并入库一个 PDF。
 
         Args:
-            file_name: 用户上传的原始文件名。
-            file_bytes: 上传文件的二进制内容。
-            max_pages: 本次最多处理的物理页数。
+            file_name:
+                用户上传时的原始文件名。
+            file_bytes:
+                PDF 文件的二进制内容。
+            metadata:
+                标题、公司、行业等文档级信息。
+                未提供时使用文件名生成默认信息。
+            max_pages:
+                本次最多处理的物理页数。
+            force_reindex:
+                是否强制重新执行解析和入库。
+                已存在的证据 ID 仍会被 indexer 跳过。
 
         Returns:
-            上传和入库结果。
+            本次上传与入库的结果。
 
         Raises:
-            ValueError: 文件类型、大小、页数或PDF内容不正确。
+            ValueError:
+                文件类型、大小、页数或内容不正确。
         """
         if max_pages <= 0:
-            raise ValueError("max_pages必须大于0")
+            raise ValueError(
+                "max_pages 必须大于 0"
+            )
 
         if not file_bytes:
-            raise ValueError("上传文件为空")
+            raise ValueError(
+                "上传文件为空"
+            )
 
         if len(file_bytes) > MAX_UPLOAD_BYTES:
-            raise ValueError("PDF不能超过20MB")
+            raise ValueError(
+                "PDF 不能超过 20MB"
+            )
 
-        # Path.name可以移除用户文件名中的目录部分，
-        # 防止文件被写到data/raw以外的位置。
+        # Path.name 会移除用户传入的目录部分，
+        # 防止文件被写到 data/raw 以外。
         safe_name = Path(file_name).name
 
         if not safe_name:
-            raise ValueError("PDF文件名不能为空")
-
-        if Path(safe_name).suffix.lower() != ".pdf":
-            raise ValueError("只支持PDF文件")
-
-        total_pages = self._validate_pdf(file_bytes)
-
-        destination, renamed = self._choose_destination(
-            safe_name=safe_name,
-            file_bytes=file_bytes,
-        )
-
-        # 相同文件已经存在时不重复写磁盘。
-        if not destination.exists():
-            destination.write_bytes(file_bytes)
-
-        raw_pages = load_pdf_pages(destination)
-        selected_pages = raw_pages[:max_pages]
-        cleaned_pages = clean_pdf_pages(selected_pages)
-
-        # 统计本次上传的 PDF 中，经过文本清洗后仍然没有任何文字的页面数量。
-        empty_pages = sum(
-            page.is_empty
-            for page in cleaned_pages
-        )
-
-        # 上传流程使用 chunker.py 定义的统一默认值。
-        # 以后需要针对某份文档调整时，仍可以显式传入参数。
-        evidence_chunks = split_pages_into_chunks(cleaned_pages)
-
-
-        if not evidence_chunks:
             raise ValueError(
-                "选定页面没有可入库的文本，"
-                "当前版本暂不支持纯扫描PDF"
+                "PDF 文件名不能为空"
             )
 
-        indexing_report = self.indexer.index_chunks(
-            evidence_chunks,
-            batch_size=10,
+        if (
+            Path(safe_name).suffix.lower()
+            != ".pdf"
+        ):
+            raise ValueError(
+                "只支持 PDF 文件"
+            )
+
+        # 先验证 PDF，避免无效内容进入登记簿。
+        total_pages = self._validate_pdf(
+            file_bytes
         )
 
+        # 直接根据上传字节计算哈希，
+        # 不需要先把文件写入磁盘。
+        uploaded_hash = sha256(
+            file_bytes
+        ).hexdigest()
+
+        existing = self.registry.get_by_hash(
+            uploaded_hash
+        )
+
+        # 同一内容已经成功入库时直接返回。
+        # 这是文档级去重，比只依靠证据 ID 更早拦截，
+        # 因而不会再次解析 PDF 或请求 Embedding。
+        if (
+            existing is not None
+            and existing.status == STATUS_INDEXED
+            and not force_reindex
+        ):
+            return UploadReport(
+                document_id=existing.document_id,
+                saved_name=existing.saved_name,
+                total_pages=existing.total_pages,
+                processed_pages=(
+                    existing.processed_pages
+                ),
+                empty_pages=0,
+                evidence_chunks=(
+                    existing.text_chunk_count
+                ),
+                inserted_chunks=0,
+                skipped_chunks=(
+                    existing.text_chunk_count
+                ),
+                truncated=(
+                    existing.processed_pages
+                    < existing.total_pages
+                ),
+                renamed=(
+                    existing.saved_name
+                    != safe_name
+                ),
+                duplicate=True,
+            )
+
+        if existing is None:
+            destination, renamed = (
+                self._choose_destination(
+                    safe_name=safe_name,
+                    file_bytes=file_bytes,
+                )
+            )
+
+            # 没有从页面填写元数据时，
+            # 使用文件名和“未分类”生成兼容记录。
+            effective_metadata = (
+                metadata
+                or DocumentMetadata(
+                    title=Path(
+                        safe_name
+                    ).stem,
+                    document_type="未分类",
+                )
+            )
+
+            record, _ = (
+                self.registry.register_document(
+                    document_hash=uploaded_hash,
+                    original_name=safe_name,
+                    saved_name=destination.name,
+                    metadata=effective_metadata,
+                    total_pages=total_pages,
+                )
+            )
+
+        else:
+            # failed、saved 或 processing 状态允许重试。
+            record = existing
+            destination = (
+                RAW_DATA_DIR
+                / record.saved_name
+            )
+            renamed = (
+                record.saved_name
+                != safe_name
+            )
+
+        # 从这里开始，页面可以看到文档正在处理。
+        self.registry.mark_processing(
+            record.document_id
+        )
+
+        try:
+            # 文件写入也属于入库流程。把它放在 try 中，
+            # 磁盘错误同样会在注册表中留下 failed 状态。
+            # 已存在的相同文件不会重复写入。
+            if not destination.exists():
+                destination.write_bytes(
+                    file_bytes
+                )
+
+            raw_pages = load_pdf_pages(
+                destination
+            )
+
+            selected_pages = raw_pages[
+                :max_pages
+            ]
+
+            cleaned_pages = clean_pdf_pages(
+                selected_pages
+            )
+
+            empty_pages = sum(
+                page.is_empty
+                for page in cleaned_pages
+            )
+
+            evidence_chunks = (
+                split_pages_into_chunks(
+                    cleaned_pages
+                )
+            )
+
+            if not evidence_chunks:
+                raise ValueError(
+                    "选定页面没有可入库的文本，"
+                    "当前版本暂不支持纯扫描 PDF"
+                )
+
+            indexing_report = (
+                self.indexer.index_chunks(
+                    evidence_chunks,
+                    batch_size=10,
+                )
+            )
+
+            # Milvus 入库成功后，才将 SQLite
+            # 中的状态改为 indexed。
+            self.registry.mark_indexed(
+                document_id=record.document_id,
+                total_pages=total_pages,
+                processed_pages=len(
+                    selected_pages
+                ),
+                text_chunk_count=len(
+                    evidence_chunks
+                ),
+                # 重新入库文本时保留已有图像统计。
+                image_chunk_count=(
+                    record.image_chunk_count
+                ),
+            )
+
+        except Exception as error:
+            # 保留文档记录和失败原因，
+            # 方便页面展示并允许稍后重试。
+            self.registry.mark_failed(
+                document_id=record.document_id,
+                error_message=(
+                    f"{type(error).__name__}: "
+                    f"{error}"
+                ),
+            )
+            raise
+
         return UploadReport(
+            document_id=record.document_id,
             saved_name=destination.name,
             total_pages=total_pages,
-            processed_pages=len(selected_pages),
+            processed_pages=len(
+                selected_pages
+            ),
             empty_pages=empty_pages,
-            evidence_chunks=len(evidence_chunks),
+            evidence_chunks=len(
+                evidence_chunks
+            ),
             inserted_chunks=(
                 indexing_report.inserted_chunks
             ),
             skipped_chunks=(
                 indexing_report.skipped_chunks
             ),
-            truncated=total_pages > len(selected_pages),
+            truncated=(
+                total_pages
+                > len(selected_pages)
+            ),
             renamed=renamed,
+            duplicate=False,
         )
 
     @staticmethod

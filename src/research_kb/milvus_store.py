@@ -197,7 +197,9 @@ class MilvusStore:
             raise ValueError("页码和读取数量必须大于 0")
 
         # Milvus 的 filter 是字符串表达式，文件名中的特殊字符需要转义。
-        safe_source = source.replace("\\", "\\\\").replace('"', '\\"')
+        safe_source = (
+            self._escape_filter_text(source)
+        )
         filter_expression = (
             f'source == "{safe_source}" '
             f"and page_number == {page_number}"
@@ -245,6 +247,87 @@ class MilvusStore:
         self.client.flush(
             collection_name=self.collection_name,
         )
+
+    @staticmethod
+    def _escape_filter_text(
+        value: str,
+    ) -> str:
+        """转义 Milvus 字符串过滤条件中的特殊字符。
+
+        Milvus 的过滤条件最终是字符串表达式。
+        如果文件名中包含反斜杠或双引号，
+        必须先转义，避免表达式格式被破坏。
+        """
+        return (
+            value
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+        )
+
+    def get_source_statistics(
+        self,
+        source: str,
+    ) -> dict[str, int]:
+        """统计一份 PDF 在 Milvus 中的证据情况。
+
+        Args:
+            source:
+                Milvus source 字段保存的 PDF 文件名。
+
+        Returns:
+            包含以下字段的字典：
+            total：全部证据数量；
+            text：文本证据数量；
+            image：图像证据数量；
+            max_page：证据覆盖到的最大 PDF 页码。
+        """
+        if not source.strip():
+            raise ValueError(
+                "source 不能为空"
+            )
+
+        safe_source = (
+            self._escape_filter_text(source)
+        )
+
+        # 这里执行的是普通字段查询，
+        # 不会调用 Embedding 模型，也不会产生模型费用。
+        records = self.client.query(
+            collection_name=self.collection_name,
+            filter=(
+                f'source == "{safe_source}"'
+            ),
+            output_fields=[
+                "content_type",
+                "page_number",
+            ],
+            limit=16384,
+        )
+
+        text_count = sum(
+            record["content_type"] == "text"
+            for record in records
+        )
+
+        image_count = sum(
+            record["content_type"] == "image"
+            for record in records
+        )
+
+        max_page = max(
+            (
+                int(record["page_number"])
+                for record in records
+            ),
+            default=0,
+        )
+
+        return {
+            "total": len(records),
+            "text": text_count,
+            "image": image_count,
+            "max_page": max_page,
+        }
 
     def list_sources(self) -> list[str]:
         """返回Collection中所有不重复的PDF文件名。"""

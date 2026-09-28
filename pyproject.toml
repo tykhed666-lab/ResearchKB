@@ -1,7 +1,7 @@
 [project]
 name = "research-kb"
 version = "0.1.0"
-description = "A multimodal RAG research knowledge base for US-listed AI infrastructure companies."
+description = "A personal multimodal research knowledge base for cross-industry documents."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [

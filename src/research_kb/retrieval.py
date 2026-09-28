@@ -1,9 +1,11 @@
 """使用Embedding和Milvus执行证据检索。"""
 
 from dataclasses import dataclass
+from math import sqrt
 
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
+from research_kb.settings import DEFAULT_TOP_K
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +44,7 @@ class MilvusRetriever:
     def search(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = DEFAULT_TOP_K,
         source: str | None = None,
     ) -> list[RetrievalResult]:
         """执行COSINE向量检索。
@@ -120,3 +122,108 @@ class MilvusRetriever:
             )
 
         return results
+
+    def expand_top_result_page(
+        self,
+        query: str,
+        results: list[RetrievalResult],
+        max_page_chunks: int = 16,
+    ) -> list[RetrievalResult]:
+        """补充首条检索结果所在物理页的其他证据片段。
+
+        复杂排版的 PDF 页面可能被切成多个片段，而 Top-K 只召回
+        其中一部分。这个方法在首次回答证据不足时，读取同页片段，
+        让模型能够恢复该页更完整的上下文。
+
+        Args:
+            query: 用户原始问题。
+            results: 第一次向量检索返回的证据。
+            max_page_chunks: 最多补充的同页片段数，避免上下文过长。
+
+        Returns:
+            同页片段加上原有其他检索结果，并去除重复证据。
+        """
+        if not query.strip():
+            raise ValueError("检索问题不能为空")
+
+        if max_page_chunks <= 0:
+            raise ValueError("max_page_chunks 必须大于 0")
+
+        if not results:
+            return []
+
+        # 第一条结果相似度最高，用它的来源和页码确定需要补充的页面。
+        top_result = results[0]
+        # 获取同页的其他片段
+        page_records = self.store.get_page_records(
+            source=top_result.source,
+            page_number=top_result.page_number,
+            limit=max_page_chunks,
+        )
+
+        if not page_records:
+            return results
+
+        # Milvus 精确查询不会返回相似度，因此在这里重新计算。
+        query_vector = self.embedding_service.embed_query(query)
+
+        page_results = [
+            RetrievalResult(
+                evidence_id=record["evidence_id"],
+                score=self._cosine_similarity(
+                    query_vector,
+                    record["vector"],
+                ),
+                source=record["source"],
+                page_number=record["page_number"],
+                chunk_index=record["chunk_index"],
+                content_type=record["content_type"],
+                text=record["text"],
+            )
+            for record in page_records
+        ]
+
+        page_evidence_ids = {
+            result.evidence_id
+            for result in page_results
+        }
+
+        # 同页片段按照页面顺序放在前面；原检索结果中属于其他页面的
+        # 证据继续保留，避免丢失跨页信息。
+        other_results = [
+            result
+            for result in results
+            if result.evidence_id not in page_evidence_ids
+        ]
+
+        return [*page_results, *other_results]
+
+    @staticmethod
+    def _cosine_similarity(
+        first_vector: list[float],
+        second_vector: list[float],
+    ) -> float:
+        """计算两个相同维度向量的余弦相似度。"""
+        if len(first_vector) != len(second_vector):
+            raise ValueError("计算相似度的向量维度不一致")
+
+        dot_product = sum(
+            first_value * second_value
+            for first_value, second_value in zip(
+                first_vector,
+                second_vector,
+                strict=True,
+            )
+        )
+
+        first_norm = sqrt(
+            sum(value * value for value in first_vector)
+        )
+        second_norm = sqrt(
+            sum(value * value for value in second_vector)
+        )
+
+        if first_norm == 0 or second_norm == 0:
+            return 0.0
+
+        return dot_product / (first_norm * second_norm)

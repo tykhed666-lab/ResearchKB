@@ -106,11 +106,10 @@ class PdfUploadService:
             for page in cleaned_pages
         )
 
-        evidence_chunks = split_pages_into_chunks(
-            cleaned_pages,
-            chunk_size=800,
-            chunk_overlap=120,
-        )
+        # 上传流程使用 chunker.py 定义的统一默认值。
+        # 以后需要针对某份文档调整时，仍可以显式传入参数。
+        evidence_chunks = split_pages_into_chunks(cleaned_pages)
+
 
         if not evidence_chunks:
             raise ValueError(

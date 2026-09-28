@@ -6,7 +6,10 @@ from hashlib import sha256
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from research_kb.pdf_loader import PdfPage
-
+from research_kb.settings import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+)
 
 @dataclass(frozen=True, slots=True)
 class EvidenceChunk:
@@ -54,8 +57,8 @@ def build_evidence_id(
 
 def split_pages_into_chunks(
     pages: list[PdfPage],
-    chunk_size: int = 800,
-    chunk_overlap: int = 120,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
 ) -> list[EvidenceChunk]:
     """把多个 PDF 页面切分成证据片段。
 

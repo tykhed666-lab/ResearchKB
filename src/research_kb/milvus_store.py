@@ -174,6 +174,59 @@ class MilvusStore:
             for record in records
         }
 
+    def get_page_records(
+        self,
+        source: str,
+        page_number: int,
+        limit: int = 64,
+    ) -> list[dict[str, Any]]:
+        """读取同一 PDF 物理页的证据，供证据不足时补充上下文。
+
+        Args:
+            source: Milvus 中保存的 PDF 文件名。
+            page_number: 用户看到的物理页码，从 1 开始。
+            limit: 最多读取的片段数，避免意外读取过多内容。
+
+        Returns:
+            按页内片段序号排列的 Milvus 记录。
+        """
+        if not source.strip():
+            raise ValueError("source 不能为空")
+
+        if page_number <= 0 or limit <= 0:
+            raise ValueError("页码和读取数量必须大于 0")
+
+        # Milvus 的 filter 是字符串表达式，文件名中的特殊字符需要转义。
+        safe_source = source.replace("\\", "\\\\").replace('"', '\\"')
+        filter_expression = (
+            f'source == "{safe_source}" '
+            f"and page_number == {page_number}"
+        )
+
+        # vector 用于下一步计算补充片段与问题的真实相似度。
+        records = self.client.query(
+            collection_name=self.collection_name,
+            filter=filter_expression,
+            output_fields=[
+                "evidence_id",
+                "source",
+                "page_number",
+                "chunk_index",
+                "content_type",
+                "text",
+                "vector",
+            ],
+            limit=limit,
+        )
+
+        return sorted(
+            records,
+            key=lambda record: (
+                record["chunk_index"],
+                record["content_type"],
+            ),
+        )
+
     def upsert_records(
         self,
         records: list[dict[str, Any]],

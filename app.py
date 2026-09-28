@@ -13,6 +13,7 @@ from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.qa import QAResult, RAGQuestionAnswerer
 from research_kb.retrieval import MilvusRetriever
+from research_kb.settings import DEFAULT_TOP_K
 
 # streamlit的页面全局配置
 st.set_page_config(
@@ -39,7 +40,7 @@ def create_services() -> tuple[
 
     answerer = RAGQuestionAnswerer(
         retriever=retriever,
-        top_k=5,
+        top_k=DEFAULT_TOP_K,
     )
 
     indexer = EvidenceIndexer(
@@ -193,7 +194,8 @@ def main() -> None:
     """渲染ResearchKB页面并处理用户问题。"""
     st.title("📚 ResearchKB")
     st.caption(
-        "面向个人的AI基础设施多模态RAG行研知识库"
+        "个人多模态行研资料库：依据已上传文档回答，"
+        "并提供原文页码。"
     )
 
     try:
@@ -353,7 +355,7 @@ def main() -> None:
     # 用户输入的文本
     prompt = st.chat_input(
         placeholder=(
-            "请输入AI基础设施行业问题"
+            "请根据已上传的行业资料提问"
             if knowledge_base_ready
             else "知识库当前不可用"
         ),

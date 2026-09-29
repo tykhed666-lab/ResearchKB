@@ -745,6 +745,49 @@ class DocumentRegistry:
             if cursor.rowcount != 1:
                 raise KeyError(f"找不到文档：{document_id}")
 
+    def update_image_chunk_count(
+        self,
+        document_id: str,
+        image_chunk_count: int,
+    ) -> None:
+        """更新一份文档实际拥有的图像证据数量。
+
+        这个方法不会修改文档状态和文本证据数。
+        图表页处理失败时，原有文本RAG仍然可用。
+        """
+        cleaned_document_id = (
+            document_id.strip()
+        )
+
+        if not cleaned_document_id:
+            raise ValueError(
+                "document_id不能为空"
+            )
+
+        if image_chunk_count < 0:
+            raise ValueError(
+                "图像证据数量不能小于0"
+            )
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE documents
+                SET image_chunk_count = ?
+                WHERE document_id = ?
+                """,
+                (
+                    image_chunk_count,
+                    cleaned_document_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise KeyError(
+                    "找不到文档："
+                    f"{cleaned_document_id}"
+                )
+
     def _update_status(
         self,
         document_id: str,

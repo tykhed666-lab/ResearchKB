@@ -40,6 +40,82 @@ def build_visual_evidence_id(
     return f"image_{digest}"
 
 
+def build_visual_evidence_chunk(
+    source: str,
+    page_number: int,
+    description: str,
+) -> EvidenceChunk:
+    """把一页视觉描述转换成图像证据。
+
+    Args:
+        source:
+            PDF在data/raw中的保存文件名。
+        page_number:
+            用户看到的PDF物理页码，从1开始。
+        description:
+            视觉模型生成的页面描述。
+
+    Returns:
+        可以交给EvidenceIndexer入库的图像证据。
+
+    Raises:
+        ValueError:
+            来源、页码、描述为空，或者描述超过
+            Milvus text字段允许的长度。
+    """
+    cleaned_source = source.strip()
+    cleaned_description = (
+        description.strip()
+    )
+
+    if not cleaned_source:
+        raise ValueError(
+            "图像证据source不能为空"
+        )
+
+    if page_number <= 0:
+        raise ValueError(
+            "图像证据页码必须大于0"
+        )
+
+    if not cleaned_description:
+        raise ValueError(
+            "图像证据描述不能为空"
+        )
+
+    description_bytes = len(
+        cleaned_description.encode(
+            "utf-8"
+        )
+    )
+
+    if (
+        description_bytes
+        > MAX_TEXT_BYTES
+    ):
+        raise ValueError(
+            "图像证据描述超过"
+            f"{MAX_TEXT_BYTES}字节"
+        )
+
+    return EvidenceChunk(
+        evidence_id=(
+            build_visual_evidence_id(
+                source=cleaned_source,
+                page_number=page_number,
+            )
+        ),
+        source=cleaned_source,
+        page_number=page_number,
+
+        # 一页只生成一条综合视觉描述，
+        # 因此页内序号固定为1。
+        chunk_index=1,
+        content_type="image",
+        text=cleaned_description,
+    )
+
+
 def load_visual_evidence_chunks(
     json_path: str | Path = DEFAULT_DESCRIPTION_PATH,
 ) -> list[EvidenceChunk]:
@@ -109,30 +185,17 @@ def load_visual_evidence_chunks(
             record.get("image_path", "")
         ).strip()
 
-        if not source:
-            raise ValueError(
-                f"第{record_index}条记录缺少source"
+        try:
+            chunk = build_visual_evidence_chunk(
+                source=source,
+                page_number=page_number,
+                description=description,
             )
-
-        if page_number <= 0:
+        except ValueError as error:
             raise ValueError(
-                f"第{record_index}条记录的页码必须大于0"
-            )
-
-        if not description:
-            raise ValueError(
-                f"第{record_index}条记录缺少description"
-            )
-
-        description_bytes = len(
-            description.encode("utf-8")
-        )
-
-        if description_bytes > MAX_TEXT_BYTES:
-            raise ValueError(
-                f"第{record_index}条描述超过"
-                f"{MAX_TEXT_BYTES}字节"
-            )
+                f"第{record_index}条记录无效："
+                f"{error}"
+            ) from error
 
         if not image_value:
             raise ValueError(
@@ -159,20 +222,6 @@ def load_visual_evidence_chunks(
                 f"找不到视觉证据图片：{image_path}"
             )
 
-        chunks.append(
-            EvidenceChunk(
-                evidence_id=(
-                    build_visual_evidence_id(
-                        source=source,
-                        page_number=page_number,
-                    )
-                ),
-                source=source,
-                page_number=page_number,
-                chunk_index=1,
-                content_type="image",
-                text=description,
-            )
-        )
+        chunks.append(chunk)
 
     return chunks

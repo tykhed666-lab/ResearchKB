@@ -1,11 +1,12 @@
 """ResearchKB 的 Streamlit 演示页面。"""
 
 from pathlib import Path
+
+import streamlit as st
+
 from research_kb.document_service import (
     DocumentManagementService,
 )
-import streamlit as st
-
 from research_kb.document_registry import (
     DocumentMetadata,
     DocumentRegistry,
@@ -24,6 +25,14 @@ from research_kb.upload_service import (
     PdfUploadService,
     UploadReport,
 )
+from research_kb.vision_service import (
+    VisionService,
+)
+from research_kb.visual_ingestion import (
+    VisualIngestionReport,
+    VisualIngestionService,
+    parse_page_numbers,
+)
 
 # streamlit的页面全局配置
 st.set_page_config(
@@ -41,8 +50,9 @@ def create_services() -> tuple[
     PdfUploadService,
     DocumentRegistry,
     DocumentManagementService,
+    VisualIngestionService,
 ]:
-    """创建并缓存问答、上传和文档注册服务。"""
+    """创建并缓存问答、上传和文档管理服务。"""
     store = MilvusStore()
 
     embedding_service = (
@@ -64,8 +74,8 @@ def create_services() -> tuple[
         embedding_service=embedding_service,
     )
 
-    # SQLite 注册表负责管理一份文档的
-    # 元数据、处理状态和证据数量。
+    # SQLite注册表负责管理文档元数据、
+    # 项目归属、状态和证据数量。
     registry = DocumentRegistry()
 
     upload_service = PdfUploadService(
@@ -73,13 +83,26 @@ def create_services() -> tuple[
         registry=registry,
     )
 
-    # 文档管理服务统一协调Milvus、SQLite
-    # 以及本地PDF和图片文件。
     document_manager = (
         DocumentManagementService(
             store=store,
             registry=registry,
             upload_service=upload_service,
+        )
+    )
+
+    # VisionService只负责单张图片的模型调用；
+    # VisualIngestionService负责完整的多页业务流程。
+    vision_service = VisionService()
+
+    visual_ingestion_service = (
+        VisualIngestionService(
+            store=store,
+            indexer=indexer,
+            vision_service=(
+                vision_service
+            ),
+            registry=registry,
         )
     )
 
@@ -89,6 +112,7 @@ def create_services() -> tuple[
         upload_service,
         registry,
         document_manager,
+        visual_ingestion_service,
     )
 
 
@@ -249,6 +273,126 @@ def render_upload_report(
             "已使用文件哈希自动重命名。"
         )
 
+def render_visual_ingestion_report(
+    report: VisualIngestionReport,
+) -> None:
+    """展示多页视觉处理的汇总和逐页结果。"""
+    if report.failed_pages:
+        failed_text = "、".join(
+            str(page_number)
+            for page_number
+            in report.failed_pages
+        )
+
+        st.warning(
+            "图表页处理完成，但以下页面失败："
+            f"{failed_text}"
+        )
+
+    else:
+        st.success(
+            "所选图表页处理完成"
+        )
+
+    st.caption(
+        f"来源文件：{report.source}"
+    )
+
+    first_column, second_column = (
+        st.columns(2)
+    )
+
+    with first_column:
+        st.metric(
+            label="视觉模型调用",
+            value=report.model_calls,
+        )
+        st.metric(
+            label="新增图像证据",
+            value=(
+                report.inserted_chunks
+            ),
+        )
+
+    with second_column:
+        st.metric(
+            label="跳过已有证据",
+            value=(
+                report.skipped_chunks
+            ),
+        )
+        st.metric(
+            label="失败页面",
+            value=len(
+                report.failed_pages
+            ),
+        )
+
+    st.markdown(
+        "##### 逐页结果"
+    )
+
+    status_names = {
+        "inserted": "新增",
+        "skipped": "已存在",
+        "failed": "失败",
+    }
+
+    for page_result in (
+        report.page_results
+    ):
+        status_name = status_names.get(
+            page_result.status,
+            page_result.status,
+        )
+
+        label = (
+            f"PDF第{page_result.page_number}页"
+            f" · {status_name}"
+        )
+
+        with st.expander(label):
+            st.code(
+                page_result.evidence_id,
+                language=None,
+            )
+
+            if (
+                page_result.image_path
+                is not None
+                and page_result
+                .image_path.is_file()
+            ):
+                st.image(
+                    str(
+                        page_result
+                        .image_path
+                    ),
+                    caption=(
+                        f"{report.source} "
+                        f"PDF第"
+                        f"{page_result.page_number}页"
+                    ),
+                )
+
+            if page_result.error_message:
+                if (
+                    page_result.status
+                    == "failed"
+                ):
+                    st.error(
+                        page_result
+                        .error_message
+                    )
+                else:
+                    # 证据已经存在但原图恢复失败时，
+                    # 检索仍可用，因此展示警告。
+                    st.warning(
+                        page_result
+                        .error_message
+                    )
+
+
 
 def main() -> None:
     """渲染ResearchKB页面并处理用户问题。"""
@@ -265,6 +409,7 @@ def main() -> None:
             upload_service,
             registry,
             document_manager,
+            visual_ingestion_service,
         ) = create_services()
 
         entity_count = (
@@ -293,7 +438,7 @@ def main() -> None:
         documents = []
         projects = []
         service_error = str(error)
-
+        visual_ingestion_service = None
     # st.sidebar 以下内容全被渲染到左侧边框
     with st.sidebar:
         # 显示标题
@@ -822,6 +967,140 @@ def main() -> None:
                         ValueError,
                     ) as error:
                         st.error(str(error))
+
+
+            with st.expander(
+                "处理图表页"
+            ):
+                st.caption(
+                    "输入包含图表、表格或重要示意图的"
+                    "PDF物理页码。一次最多处理5页。"
+                )
+
+                st.info(
+                    "每个尚未处理的页面最多产生"
+                    "1次视觉模型调用和1次Embedding调用；"
+                    "已有图像证据会直接跳过。"
+                )
+
+                # 处理完成后页面会重新运行，
+                # 因此使用session_state暂存上一次报告。
+                last_visual_report = (
+                    st.session_state.pop(
+                        "last_visual_ingestion_report",
+                        None,
+                    )
+                )
+
+                if (
+                    last_visual_report
+                    is not None
+                ):
+                    if (
+                        last_visual_report
+                        .document_id
+                        == managed_document_id
+                    ):
+                        render_visual_ingestion_report(
+                            last_visual_report
+                        )
+
+                visual_page_input = (
+                    st.text_input(
+                        label="图表页码",
+                        placeholder=(
+                            "例如：3, 7, 9-10"
+                        ),
+                        help=(
+                            "支持英文逗号、中文逗号"
+                            "和连续页码范围。"
+                        ),
+                        key=(
+                            "visual_page_input_"
+                            f"{managed_document_id}"
+                        ),
+                    )
+                )
+
+                st.caption(
+                    f"当前文档共"
+                    f"{managed_document.total_pages}页，"
+                    f"已有图像证据"
+                    f"{managed_document.image_chunk_count}条。"
+                )
+
+                visual_button_disabled = (
+                    visual_ingestion_service
+                    is None
+                    or not visual_page_input.strip()
+                )
+
+                if st.button(
+                    "生成图像证据",
+                    disabled=(
+                        visual_button_disabled
+                    ),
+                    use_container_width=True,
+                    key=(
+                        "ingest_visual_pages_"
+                        f"{managed_document_id}"
+                    ),
+                ):
+                    try:
+                        selected_visual_pages = (
+                            parse_page_numbers(
+                                visual_page_input
+                            )
+                        )
+
+                        if not selected_visual_pages:
+                            raise ValueError(
+                                "请至少输入一个图表页码"
+                            )
+
+                        with st.spinner(
+                            "正在渲染页面、分析图表"
+                            "并写入Milvus……"
+                        ):
+                            visual_report = (
+                                visual_ingestion_service
+                                .ingest_pages(
+                                    document_id=(
+                                        managed_document_id
+                                    ),
+                                    page_numbers=(
+                                        selected_visual_pages
+                                    ),
+                                )
+                            )
+
+                        st.session_state[
+                            "last_visual_ingestion_report"
+                        ] = visual_report
+
+                        # 重新读取Milvus实体数和
+                        # SQLite图像证据统计。
+                        st.rerun()
+
+                    except (
+                        TypeError,
+                        ValueError,
+                        KeyError,
+                        FileNotFoundError,
+                    ) as error:
+                        st.error(str(error))
+
+                    except Exception as error:
+                        st.error(
+                            "图表页处理失败，请检查"
+                            "视觉模型、Embedding和Milvus。"
+                        )
+
+                        print(
+                            "Streamlit图表页处理错误："
+                            f"{type(error).__name__}: "
+                            f"{error}"
+                        )
 
             with st.expander(
                 "重新入库与删除"

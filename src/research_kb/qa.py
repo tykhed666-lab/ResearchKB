@@ -1,6 +1,7 @@
 """基于Milvus检索证据生成有引用的回答。"""
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -127,13 +128,15 @@ class RAGQuestionAnswerer:
     def answer(
         self,
         question: str,
-        source: str | None = None,
+        source: str | Sequence[str] | None = None,
     ) -> QAResult:
         """检索证据、生成回答并校验引用。
 
         Args:
             question: 用户问题。
-            source: 可选的PDF文件过滤条件。
+            source:
+                可选的单个 PDF 文件名，
+                或允许参与回答的多个文件名。
 
         Returns:
             经过引用ID校验的问答结果。

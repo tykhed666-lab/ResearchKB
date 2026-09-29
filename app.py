@@ -1,7 +1,9 @@
 """ResearchKB 的 Streamlit 演示页面。"""
 
 from pathlib import Path
-
+from research_kb.document_service import (
+    DocumentManagementService,
+)
 import streamlit as st
 
 from research_kb.document_registry import (
@@ -38,6 +40,7 @@ def create_services() -> tuple[
     RAGQuestionAnswerer,
     PdfUploadService,
     DocumentRegistry,
+    DocumentManagementService,
 ]:
     """创建并缓存问答、上传和文档注册服务。"""
     store = MilvusStore()
@@ -70,11 +73,22 @@ def create_services() -> tuple[
         registry=registry,
     )
 
+    # 文档管理服务统一协调Milvus、SQLite
+    # 以及本地PDF和图片文件。
+    document_manager = (
+        DocumentManagementService(
+            store=store,
+            registry=registry,
+            upload_service=upload_service,
+        )
+    )
+
     return (
         store,
         answerer,
         upload_service,
         registry,
+        document_manager,
     )
 
 
@@ -154,8 +168,24 @@ def render_message(message: dict) -> None:
             st.markdown(message["content"])
 
             if message.get("source"):
+                source_scope = (
+                    message["source"]
+                )
+
+                if isinstance(
+                    source_scope,
+                    list,
+                ):
+                    source_text = "、".join(
+                        source_scope
+                    )
+                else:
+                    source_text = (
+                        source_scope
+                    )
+
                 st.caption(
-                    f"限定资料：{message['source']}"
+                    f"限定资料：{source_text}"
                 )
             return
 
@@ -234,38 +264,34 @@ def main() -> None:
             answerer,
             upload_service,
             registry,
+            document_manager,
         ) = create_services()
 
         entity_count = (
             store.get_entity_count()
         )
 
-        # 文档目录改为从 SQLite 读取，
-        # 不再扫描全部 Milvus 向量推断文件列表。
+        # 页面启动时读取全部文档和研究项目。
+        # 后续筛选仍会通过 Registry 查询 SQLite。
         documents = (
             registry.list_documents()
         )
 
-        # 只有成功入库的文档才能参与检索。
-        sources = [
-            document.saved_name
-            for document in documents
-            if (
-                document.status
-                == STATUS_INDEXED
-            )
-        ]
+        projects = (
+            registry.list_projects()
+        )
 
         service_error = None
 
     except Exception as error:
         store = None
         answerer = None
+        document_manager = None
         upload_service = None
         registry = None
         entity_count = 0
         documents = []
-        sources = []
+        projects = []
         service_error = str(error)
 
     # st.sidebar 以下内容全被渲染到左侧边框
@@ -287,29 +313,329 @@ def main() -> None:
                 "知识库服务连接失败，请检查Milvus和模型配置。"
             )
 
-        # 展示已查重的全部资料
-        source_options = [
-            "全部资料",
-            *sources,
+        st.subheader("研究范围")
+        # 显示项目创建、文档分配等操作完成后的提示。
+        project_action_notice = (
+            st.session_state.pop(
+                "project_action_notice",
+                None,
+            )
+        )
+
+        if project_action_notice:
+            st.success(project_action_notice)
+
+        # 删除或重新入库完成后，
+        # 在页面重新运行时显示结果。
+        document_action_notice = (
+            st.session_state.pop(
+                "document_action_notice",
+                None,
+            )
+        )
+
+        if document_action_notice:
+            st.success(
+                document_action_notice
+            )
+
+        document_action_warnings = (
+            st.session_state.pop(
+                "document_action_warnings",
+                (),
+            )
+        )
+
+        for warning in (
+            document_action_warnings
+        ):
+            st.warning(warning)
+
+        # 删除文档后，在下一次页面运行、
+        # 各个控件创建前清理旧的选择状态。
+        if st.session_state.pop(
+            "reset_document_widgets",
+            False,
+        ):
+            for state_key in (
+                "selected_document_sources",
+                "document_scope_signature",
+                "managed_document_id",
+                "target_project_id",
+                "managed_document_assignment_signature",
+            ):
+                st.session_state.pop(
+                    state_key,
+                    None,
+                )
+
+        # form 会把输入框和提交按钮组成一次完整操作，
+        # 用户点击提交后才会真正调用 SQLite。
+        with st.expander("新建研究项目"):
+            with st.form(
+                "create_project_form",
+                clear_on_submit=True,
+            ):
+                new_project_name = (
+                    st.text_input(
+                        label="项目名称",
+                        placeholder=(
+                            "例如：新能源汽车"
+                        ),
+                    )
+                )
+
+                new_project_description = (
+                    st.text_area(
+                        label="项目说明",
+                        placeholder=(
+                            "记录该项目主要研究的"
+                            "行业、公司或问题。"
+                        ),
+                    )
+                )
+
+                create_project_submitted = (
+                    st.form_submit_button(
+                        "创建项目",
+                        use_container_width=True,
+                    )
+                )
+
+            if create_project_submitted:
+                if registry is None:
+                    st.error(
+                        "文档注册服务尚未连接。"
+                    )
+
+                else:
+                    try:
+                        created_project = (
+                            registry.create_project(
+                                name=(
+                                    new_project_name
+                                ),
+                                description=(
+                                    new_project_description
+                                ),
+                            )
+                        )
+
+                        # 把提示保存到 session_state，
+                        # 页面重新运行后仍然能够显示。
+                        st.session_state[
+                            "project_action_notice"
+                        ] = (
+                            "已创建研究项目："
+                            f"{created_project.name}"
+                        )
+
+                        # 重新读取项目列表，
+                        # 让新项目立即出现在下拉框中。
+                        st.rerun()
+
+                    except ValueError as error:
+                        st.error(str(error))
+
+        project_by_id = {
+            project.project_id: project
+            for project in projects
+        }
+
+        project_options = [
+            None,
+            *project_by_id,
         ]
 
-        # 创建一个下拉选择框，选择检索范围
-        selected_source = st.selectbox(
-            label="检索范围",
-            options=source_options,
+        selected_project_id = (
+            st.selectbox(
+                label="研究项目",
+                options=project_options,
+                format_func=lambda value: (
+                    "全部项目"
+                    if value is None
+                    else project_by_id[
+                        value
+                    ].name
+                ),
+            )
+        )
+
+        industries = sorted(
+            {
+                document.industry
+                for document in documents
+                if document.industry
+            }
+        )
+
+        selected_industry = (
+            st.selectbox(
+                label="行业",
+                options=[
+                    None,
+                    *industries,
+                ],
+                format_func=lambda value: (
+                    value or "全部行业"
+                ),
+            )
+        )
+
+        companies = sorted(
+            {
+                document.company
+                for document in documents
+                if document.company
+            }
+        )
+
+        selected_company = (
+            st.selectbox(
+                label="公司或机构",
+                options=[
+                    None,
+                    *companies,
+                ],
+                format_func=lambda value: (
+                    value or "全部公司"
+                ),
+            )
+        )
+
+        with st.expander(
+            "报告日期筛选"
+        ):
+            date_column_1, date_column_2 = (
+                st.columns(2)
+            )
+
+            with date_column_1:
+                selected_date_from = (
+                    st.date_input(
+                        label="开始日期",
+                        value=None,
+                    )
+                )
+
+            with date_column_2:
+                selected_date_to = (
+                    st.date_input(
+                        label="结束日期",
+                        value=None,
+                    )
+                )
+
+        report_date_from = (
+            selected_date_from.isoformat()
+            if selected_date_from
+            is not None
+            else None
+        )
+
+        report_date_to = (
+            selected_date_to.isoformat()
+            if selected_date_to
+            is not None
+            else None
+        )
+
+        if registry is None:
+            visible_documents = []
+
+        else:
+            try:
+                visible_documents = (
+                    registry.list_documents(
+                        project_id=(
+                            selected_project_id
+                        ),
+                        industry=(
+                            selected_industry
+                        ),
+                        company=(
+                            selected_company
+                        ),
+                        report_date_from=(
+                            report_date_from
+                        ),
+                        report_date_to=(
+                            report_date_to
+                        ),
+                    )
+                )
+
+            except ValueError as error:
+                visible_documents = []
+                st.error(str(error))
+
+        # 失败或处理中记录仍然显示在目录，
+        # 但只有 indexed 文档可以参与问答。
+        indexed_documents = [
+            document
+            for document in visible_documents
+            if (
+                document.status
+                == STATUS_INDEXED
+            )
+        ]
+
+        available_sources = [
+            document.saved_name
+            for document in indexed_documents
+        ]
+
+        # 项目或筛选条件变化时，
+        # 默认重新选中当前范围内的全部文档。
+        scope_signature = (
+            selected_project_id,
+            selected_industry,
+            selected_company,
+            report_date_from,
+            report_date_to,
+        )
+
+        if (
+            st.session_state.get(
+                "document_scope_signature"
+            )
+            != scope_signature
+        ):
+            st.session_state[
+                "document_scope_signature"
+            ] = scope_signature
+
+            st.session_state[
+                "selected_document_sources"
+            ] = available_sources
+
+        selected_sources = (
+            st.multiselect(
+                label="参与问答的资料",
+                options=available_sources,
+                key=(
+                    "selected_document_sources"
+                ),
+                help=(
+                    "只会在选中的 PDF "
+                    "证据范围内执行检索。"
+                ),
+            )
         )
 
         st.markdown(
-            "#### 文档登记簿"
+            "#### 筛选后的文档"
         )
 
-        if not documents:
+        if not visible_documents:
             st.info(
-                "当前没有已登记资料。"
+                "当前筛选条件下没有文档。"
             )
 
         else:
-            for document in documents:
+            for document in (
+                visible_documents
+            ):
                 label = document.title
 
                 if document.ticker:
@@ -321,19 +647,337 @@ def main() -> None:
                     f"**{label}**"
                 )
 
+                project = (
+                    project_by_id.get(
+                        document.project_id
+                    )
+                )
+
+                project_name = (
+                    project.name
+                    if project is not None
+                    else "未分配项目"
+                )
+
                 st.caption(
-                    f"{document.document_type}"
+                    f"{project_name}"
+                    f" · {document.document_type}"
                     f" · "
                     f"{document.industry or '行业未填'}"
                     f" · 状态 {document.status}"
-                    f" · 文本 {document.text_chunk_count}"
-                    f" · 图像 {document.image_chunk_count}"
+                    f" · 文本 "
+                    f"{document.text_chunk_count}"
+                    f" · 图像 "
+                    f"{document.image_chunk_count}"
                 )
+
+                if document.report_date:
+                    st.caption(
+                        "报告日期："
+                        f"{document.report_date}"
+                    )
 
                 if document.error_message:
                     st.error(
                         document.error_message
                     )
+
+
+        st.markdown(
+            "#### 文档归属管理"
+        )
+
+        if not documents:
+            st.info(
+                "当前没有可以分配的文档。"
+            )
+
+        else:
+            # 通过 document_id 定位文档，
+            # 标题只负责给用户展示。
+            document_by_id = {
+                document.document_id: document
+                for document in documents
+            }
+
+            managed_document_id = (
+                st.selectbox(
+                    label="选择需要调整的文档",
+                    options=[
+                        document.document_id
+                        for document in documents
+                    ],
+                    format_func=lambda value: (
+                        f"{document_by_id[value].title}"
+                        f" · "
+                        f"{document_by_id[value].saved_name}"
+                    ),
+                    key=(
+                        "managed_document_id"
+                    ),
+                )
+            )
+
+            managed_document = (
+                document_by_id[
+                    managed_document_id
+                ]
+            )
+
+            # 切换待管理文档时，把目标项目同步为该文档
+            # 当前所属项目，避免用户直接点击保存后误移出项目。
+            if (
+                st.session_state.get(
+                    "managed_document_assignment_signature"
+                )
+                != managed_document_id
+            ):
+                st.session_state[
+                    "managed_document_assignment_signature"
+                ] = managed_document_id
+                st.session_state[
+                    "target_project_id"
+                ] = managed_document.project_id
+
+            current_project = (
+                project_by_id.get(
+                    managed_document.project_id
+                )
+            )
+
+            current_project_name = (
+                current_project.name
+                if current_project is not None
+                else "未分配项目"
+            )
+
+            st.caption(
+                "当前归属："
+                f"{current_project_name}"
+            )
+
+            target_project_id = (
+                st.selectbox(
+                    label="调整到",
+                    options=project_options,
+                    format_func=lambda value: (
+                        "未分配项目"
+                        if value is None
+                        else project_by_id[
+                            value
+                        ].name
+                    ),
+                    key=(
+                        "target_project_id"
+                    ),
+                )
+            )
+
+            if st.button(
+                "保存文档归属",
+                use_container_width=True,
+            ):
+                if registry is None:
+                    st.error(
+                        "文档注册服务尚未连接。"
+                    )
+
+                else:
+                    try:
+                        registry.assign_document(
+                            document_id=(
+                                managed_document_id
+                            ),
+                            project_id=(
+                                target_project_id
+                            ),
+                        )
+
+                        target_project = (
+                            project_by_id.get(
+                                target_project_id
+                            )
+                        )
+
+                        target_project_name = (
+                            target_project.name
+                            if target_project
+                            is not None
+                            else "未分配项目"
+                        )
+
+                        st.session_state[
+                            "project_action_notice"
+                        ] = (
+                            f"已将《"
+                            f"{managed_document.title}"
+                            f"》调整到："
+                            f"{target_project_name}"
+                        )
+
+                        st.rerun()
+
+                    except (
+                        KeyError,
+                        ValueError,
+                    ) as error:
+                        st.error(str(error))
+
+            with st.expander(
+                "重新入库与删除"
+            ):
+                st.caption(
+                    "重新入库会重新生成文本向量，"
+                    "已有图表证据会被保留。"
+                )
+
+                default_reindex_pages = min(
+                    max(
+                        managed_document
+                        .processed_pages,
+                        1,
+                    ),
+                    30,
+                )
+
+                reindex_max_pages = (
+                    st.number_input(
+                        label="重新处理页数",
+                        min_value=1,
+                        max_value=30,
+                        value=(
+                            default_reindex_pages
+                        ),
+                        step=1,
+                        key=(
+                            "reindex_max_pages_"
+                            f"{managed_document_id}"
+                        ),
+                    )
+                )
+
+                if st.button(
+                    "重新生成文本证据",
+                    disabled=(
+                        document_manager is None
+                    ),
+                    use_container_width=True,
+                    key=(
+                        "reindex_document_"
+                        f"{managed_document_id}"
+                    ),
+                ):
+                    with st.spinner(
+                        "正在删除旧文本证据并重新入库……"
+                    ):
+                        try:
+                            reindex_report = (
+                                document_manager
+                                .reindex_document(
+                                    document_id=(
+                                        managed_document_id
+                                    ),
+                                    max_pages=int(
+                                        reindex_max_pages
+                                    ),
+                                )
+                            )
+
+                            upload_report = (
+                                reindex_report
+                                .upload_report
+                            )
+
+                            st.session_state[
+                                "document_action_notice"
+                            ] = (
+                                "重新入库完成：删除旧文本证据 "
+                                f"{reindex_report.deleted_text_count}"
+                                " 条，写入文本证据 "
+                                f"{upload_report.inserted_chunks}"
+                                " 条。"
+                            )
+
+                            st.rerun()
+
+                        except Exception as error:
+                            st.error(
+                                "重新入库失败："
+                                f"{error}"
+                            )
+
+                st.divider()
+
+                st.warning(
+                    "删除会同时清理Milvus证据、"
+                    "SQLite记录、本地PDF和页面图片。"
+                )
+
+                delete_confirmed = (
+                    st.checkbox(
+                        "我确认删除当前文档及其全部证据",
+                        key=(
+                            "confirm_delete_"
+                            f"{managed_document_id}"
+                        ),
+                    )
+                )
+
+                if st.button(
+                    "删除当前文档",
+                    disabled=(
+                        not delete_confirmed
+                        or document_manager
+                        is None
+                    ),
+                    use_container_width=True,
+                    key=(
+                        "delete_document_"
+                        f"{managed_document_id}"
+                    ),
+                ):
+                    with st.spinner(
+                        "正在清理文档和证据……"
+                    ):
+                        try:
+                            delete_report = (
+                                document_manager
+                                .delete_document(
+                                    managed_document_id
+                                )
+                            )
+
+                            st.session_state[
+                                "document_action_notice"
+                            ] = (
+                                "文档删除完成："
+                                f"{delete_report.saved_name}"
+                                "，共清理 "
+                                f"{delete_report.deleted_evidence_count}"
+                                " 条证据。备份位置："
+                                f"{delete_report.backup_directory}"
+                            )
+
+                            st.session_state[
+                                "document_action_warnings"
+                            ] = (
+                                delete_report
+                                .cleanup_warnings
+                            )
+
+                            # 下一次运行时清理已经失效的
+                            # 文档选择和问答范围。
+                            st.session_state[
+                                "reset_document_widgets"
+                            ] = True
+
+                            st.rerun()
+
+                        except Exception as error:
+                            st.error(
+                                "文档删除失败："
+                                f"{error}"
+                            )
 
         # PDF上传区域从这里开始。
         st.divider()
@@ -416,6 +1060,25 @@ def main() -> None:
             ],
         )
 
+        upload_project_id = (
+            st.selectbox(
+                label="归属研究项目",
+                options=project_options,
+                format_func=lambda value: (
+                    "暂不分配项目"
+                    if value is None
+                    else project_by_id[
+                        value
+                    ].name
+                ),
+                help=(
+                    "入库完成后，将文档直接"
+                    "归入所选研究项目。"
+                ),
+                key="upload_project_id",
+            )
+        )
+
         report_date = st.text_input(
             label="报告日期",
             placeholder="YYYY-MM-DD，可不填",
@@ -466,7 +1129,22 @@ def main() -> None:
                             max_pages=int(max_pages),
                         )
                     )
-
+                    # PDF入库成功后，再更新文档与项目的关系。
+                    # UploadReport 中的 document_id 对应
+                    # SQLite documents 表的主键。
+                    if (
+                        registry is not None
+                        and upload_project_id
+                        is not None
+                    ):
+                        registry.assign_document(
+                            document_id=(
+                                upload_report.document_id
+                            ),
+                            project_id=(
+                                upload_project_id
+                            ),
+                        )
                     st.session_state[
                         "last_upload_report"
                     ] = upload_report
@@ -508,6 +1186,7 @@ def main() -> None:
     knowledge_base_ready = (
         answerer is not None
         and entity_count > 0
+        and bool(selected_sources)
     )
 
     # 用户输入的文本
@@ -531,14 +1210,10 @@ def main() -> None:
         st.warning("问题不能为空。")
         return
 
-    # 这是加了一个限定，如果要搜索全部资料，不加filter
-    # 不然就要限定来源，即只搜索选中的来源
-    # 限定来源，即只搜索选中的来源
-    source_filter = (
-        None
-        if selected_source == "全部资料"
-        else selected_source
-    )
+
+    # selected_sources 是当前项目和筛选条件下，
+    # 用户明确选择的 PDF 文件名列表。
+    source_filter = selected_sources
 
     user_message = {
         "role": "user",

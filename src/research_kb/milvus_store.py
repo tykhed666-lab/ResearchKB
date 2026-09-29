@@ -329,6 +329,91 @@ class MilvusStore:
             "max_page": max_page,
         }
 
+    def delete_source_records(
+        self,
+        source: str,
+        content_type: str | None = None,
+    ) -> int:
+        """删除一份PDF在Milvus中的证据。
+
+        Args:
+            source:
+                Milvus source字段保存的PDF文件名。
+            content_type:
+                None表示删除全部证据；
+                "text"只删除文本证据；
+                "image"只删除图像证据。
+
+        Returns:
+            删除前匹配到的证据数量。
+        """
+        cleaned_source = source.strip()
+
+        if not cleaned_source:
+            raise ValueError(
+                "source不能为空"
+            )
+
+        if content_type not in {
+            None,
+            "text",
+            "image",
+        }:
+            raise ValueError(
+                "content_type只能是"
+                "text、image或None"
+            )
+
+        # 删除前先统计数量，使页面能够告诉用户
+        # 本次实际清理了多少条证据。
+        statistics = (
+            self.get_source_statistics(
+                cleaned_source
+            )
+        )
+
+        if content_type is None:
+            deleted_count = (
+                statistics["total"]
+            )
+        else:
+            deleted_count = (
+                statistics[content_type]
+            )
+
+        if deleted_count == 0:
+            return 0
+
+        safe_source = (
+            self._escape_filter_text(
+                cleaned_source
+            )
+        )
+
+        filter_expression = (
+            f'source == "{safe_source}"'
+        )
+
+        if content_type is not None:
+            filter_expression += (
+                " and content_type == "
+                f'"{content_type}"'
+            )
+
+        # delete只处理Milvus中的向量和证据字段，
+        # 不会删除SQLite记录或本地PDF。
+        self.client.delete(
+            collection_name=(
+                self.collection_name
+            ),
+            filter=filter_expression,
+        )
+
+        # 立即持久化删除结果，供后续重新入库使用。
+        self.flush()
+
+        return deleted_count
+
     def list_sources(self) -> list[str]:
         """返回Collection中所有不重复的PDF文件名。"""
         records = self.client.query(

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Final
+from uuid import uuid4
 
 from research_kb.settings import DOCUMENT_DATABASE_PATH
 
@@ -57,7 +58,29 @@ class DocumentRecord:
     image_chunk_count: int
     status: str
     error_message: str | None
+    # 文档所属研究项目；旧文档迁移后暂时为空。
+    project_id: str | None
 
+
+@dataclass(frozen=True, slots=True)
+class ProjectRecord:
+    """表示一个轻量研究项目。"""
+
+    project_id: str
+    name: str
+    description: str | None
+    created_at: str
+
+
+CREATE_PROJECTS_SQL: Final = """
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+        UNIQUE COLLATE NOCASE,
+    description TEXT,
+    created_at TEXT NOT NULL
+);
+"""
 
 CREATE_DOCUMENTS_SQL: Final = """
 CREATE TABLE IF NOT EXISTS documents (
@@ -79,7 +102,9 @@ CREATE TABLE IF NOT EXISTS documents (
     status TEXT NOT NULL CHECK(
         status IN ('saved', 'processing', 'indexed', 'failed')
     ),
-    error_message TEXT
+    error_message TEXT,
+    project_id TEXT
+        REFERENCES projects(project_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_company ON documents(company);
@@ -102,7 +127,7 @@ class DocumentRegistry:
 
     @contextmanager
     def _connect(
-            self,
+        self,
     ) -> Iterator[sqlite3.Connection]:
         """创建连接，并在事务结束后保证关闭数据库。"""
         connection = sqlite3.connect(
@@ -131,11 +156,52 @@ class DocumentRegistry:
             # 不会自动关闭连接，因此需要显式 close。
             connection.close()
 
-    def _initialize_database(self) -> None:
-        """重复执行也安全地创建表与索引。"""
+    def _initialize_database(
+        self,
+    ) -> None:
+        """创建项目表并迁移已有 documents 表。
+
+        第八天创建的数据库没有 project_id。
+        这里先检查已有字段，只有缺少时才执行
+        ALTER TABLE，因此每次启动都可以安全调用。
+        """
         with self._connect() as connection:
-            # executescript 会自动提交事务，从而完成建表流程
-            connection.executescript(CREATE_DOCUMENTS_SQL)
+            # documents 的外键指向 projects，
+            # 所以先确保 projects 表存在。
+            connection.executescript(
+                CREATE_PROJECTS_SQL
+            )
+
+            connection.executescript(
+                CREATE_DOCUMENTS_SQL
+            )
+
+            # PRAGMA table_info 返回表中的字段信息。
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(documents)"
+                ).fetchall()
+            }
+
+            # CREATE TABLE IF NOT EXISTS 不会修改旧表，
+            # 因此第八天数据库需要执行一次 ALTER。
+            if "project_id" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE documents
+                    ADD COLUMN project_id TEXT
+                        REFERENCES projects(project_id)
+                    """
+                )
+
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS
+                    idx_documents_project_id
+                ON documents(project_id)
+                """
+            )
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row | None) -> DocumentRecord | None:
@@ -209,20 +275,390 @@ class DocumentRegistry:
             ).fetchone()
         return self._row_to_record(row)
 
-    def list_documents(self, status: str | None = None) -> list[DocumentRecord]:
-        """按上传时间倒序列出文档，可限定处理状态。"""
-        parameters: tuple[str, ...] = ()
-        sql = "SELECT * FROM documents"
+    def list_documents(
+        self,
+        status: str | None = None,
+        project_id: str | None = None,
+        industry: str | None = None,
+        company: str | None = None,
+        report_date_from: str | None = None,
+        report_date_to: str | None = None,
+    ) -> list[DocumentRecord]:
+        """按照多个可选条件组合筛选文档。
+
+        Args:
+            status:
+                文档处理状态。
+            project_id:
+                文档所属研究项目。
+                None 表示不限制项目。
+            industry:
+                精确匹配行业。
+            company:
+                精确匹配公司或机构。
+            report_date_from:
+                报告日期下限，格式为 YYYY-MM-DD。
+            report_date_to:
+                报告日期上限，格式为 YYYY-MM-DD。
+
+        Returns:
+            按上传时间倒序排列的文档记录。
+        """
+        conditions: list[str] = []
+        parameters: list[str] = []
+
         if status is not None:
-            if status not in VALID_DOCUMENT_STATUSES:
-                raise ValueError(f"不支持的文档状态：{status}")
-            sql += " WHERE status = ?"
-            parameters = (status,)
-        sql += " ORDER BY uploaded_at DESC, saved_name ASC"
+            if (
+                status
+                not in VALID_DOCUMENT_STATUSES
+            ):
+                raise ValueError(
+                    f"不支持的文档状态：{status}"
+                )
+
+            conditions.append(
+                "status = ?"
+            )
+            parameters.append(status)
+
+        if project_id is not None:
+            cleaned_project_id = (
+                project_id.strip()
+            )
+
+            if not cleaned_project_id:
+                raise ValueError(
+                    "project_id 不能为空字符串"
+                )
+
+            conditions.append(
+                "project_id = ?"
+            )
+            parameters.append(
+                cleaned_project_id
+            )
+
+        normalized_industry = (
+            self._optional_text(industry)
+        )
+
+        if normalized_industry is not None:
+            conditions.append(
+                "industry = ?"
+            )
+            parameters.append(
+                normalized_industry
+            )
+
+        normalized_company = (
+            self._optional_text(company)
+        )
+
+        if normalized_company is not None:
+            conditions.append(
+                "company = ?"
+            )
+            parameters.append(
+                normalized_company
+            )
+
+        normalized_date_from = (
+            self._optional_text(
+                report_date_from
+            )
+        )
+
+        normalized_date_to = (
+            self._optional_text(
+                report_date_to
+            )
+        )
+
+        # SQLite 使用 ISO 日期字符串时，
+        # YYYY-MM-DD 的字符串顺序与日期顺序一致。
+        if normalized_date_from is not None:
+            try:
+                # 把字符串解析为日期对象
+                date.fromisoformat(
+                    normalized_date_from
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "开始日期必须使用 YYYY-MM-DD"
+                ) from error
+
+            conditions.append(
+                "report_date >= ?"
+            )
+            parameters.append(
+                normalized_date_from
+            )
+
+        if normalized_date_to is not None:
+            try:
+                date.fromisoformat(
+                    normalized_date_to
+                )
+            except ValueError as error:
+                raise ValueError(
+                    "结束日期必须使用 YYYY-MM-DD"
+                ) from error
+
+            conditions.append(
+                "report_date <= ?"
+            )
+            parameters.append(
+                normalized_date_to
+            )
+
+        if (
+            normalized_date_from is not None
+            and normalized_date_to is not None
+            and normalized_date_from
+            > normalized_date_to
+        ):
+            raise ValueError(
+                "开始日期不能晚于结束日期"
+            )
+
+        sql = "SELECT * FROM documents"
+
+        if conditions:
+            sql += (
+                " WHERE "
+                + " AND ".join(conditions)
+            )
+
+        sql += (
+            " ORDER BY "
+            "uploaded_at DESC, "
+            "saved_name ASC"
+        )
 
         with self._connect() as connection:
-            rows = connection.execute(sql, parameters).fetchall()
-        return [DocumentRecord(**dict(row)) for row in rows]
+            rows = connection.execute(
+                sql,
+                parameters,
+            ).fetchall()
+
+        return [
+            DocumentRecord(**dict(row))
+            for row in rows
+        ]
+
+    def get_project_by_id(
+        self,
+        project_id: str,
+    ) -> ProjectRecord | None:
+        """根据项目 ID 查询研究项目。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM projects
+                WHERE project_id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return ProjectRecord(
+            **dict(row)
+        )
+
+    def create_project(
+        self,
+        name: str,
+        description: str | None = None,
+    ) -> ProjectRecord:
+        """创建一个研究项目。
+
+        项目名称不区分英文大小写，不能重复。
+        """
+        cleaned_name = name.strip()
+
+        if not cleaned_name:
+            raise ValueError(
+                "项目名称不能为空"
+            )
+
+        cleaned_description = (
+            self._optional_text(
+                description
+            )
+        )
+
+        # UUID 与名称无关，因此以后修改项目名称时，
+        # 文档关联不需要变化。
+        project_id = (
+            f"project_{uuid4().hex[:16]}"
+        )
+
+        created_at = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+        )
+
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO projects (
+                        project_id,
+                        name,
+                        description,
+                        created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        cleaned_name,
+                        cleaned_description,
+                        created_at,
+                    ),
+                )
+
+        except sqlite3.IntegrityError as error:
+            raise ValueError(
+                "项目名称已经存在："
+                f"{cleaned_name}"
+            ) from error
+
+        return ProjectRecord(
+            project_id=project_id,
+            name=cleaned_name,
+            description=cleaned_description,
+            created_at=created_at,
+        )
+
+    def list_projects(
+        self,
+    ) -> list[ProjectRecord]:
+        """按照创建时间列出所有研究项目。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM projects
+                ORDER BY created_at, name
+                """
+            ).fetchall()
+
+        return [
+            ProjectRecord(**dict(row))
+            for row in rows
+        ]
+
+    def assign_document(
+        self,
+        document_id: str,
+        project_id: str | None,
+    ) -> None:
+        """将文档分配给项目。
+
+        Args:
+            document_id:
+                等待修改的文档 ID。
+            project_id:
+                目标项目 ID。
+                传入 None 表示移出当前项目。
+        """
+        with self._connect() as connection:
+            if project_id is not None:
+                project = connection.execute(
+                    """
+                    SELECT project_id
+                    FROM projects
+                    WHERE project_id = ?
+                    """,
+                    (project_id,),
+                ).fetchone()
+
+                if project is None:
+                    raise KeyError(
+                        "找不到研究项目："
+                        f"{project_id}"
+                    )
+
+            cursor = connection.execute(
+                """
+                UPDATE documents
+                SET project_id = ?
+                WHERE document_id = ?
+                """,
+                (
+                    project_id,
+                    document_id,
+                ),
+            )
+
+            if cursor.rowcount != 1:
+                raise KeyError(
+                    "找不到文档："
+                    f"{document_id}"
+                )
+
+    def delete_document(
+        self,
+        document_id: str,
+    ) -> DocumentRecord:
+        """删除SQLite中的文档登记记录。
+
+        这个方法只管理SQLite，不负责删除Milvus证据
+        和data/raw中的PDF。跨存储清理会交给上层服务协调。
+
+        Returns:
+            删除前的完整文档记录。
+        """
+        cleaned_document_id = (
+            document_id.strip()
+        )
+
+        if not cleaned_document_id:
+            raise ValueError(
+                "document_id不能为空"
+            )
+
+        with self._connect() as connection:
+            # 先读取完整记录，后续删除本地文件时
+            # 仍然需要saved_name等信息。
+            row = connection.execute(
+                """
+                SELECT *
+                FROM documents
+                WHERE document_id = ?
+                """,
+                (cleaned_document_id,),
+            ).fetchone()
+
+            if row is None:
+                raise KeyError(
+                    "找不到文档："
+                    f"{cleaned_document_id}"
+                )
+
+            connection.execute(
+                """
+                DELETE FROM documents
+                WHERE document_id = ?
+                """,
+                (cleaned_document_id,),
+            )
+
+        deleted_record = (
+            self._row_to_record(row)
+        )
+
+        # 前面已经检查过row不为空，
+        # 这个判断主要帮助类型检查器确认返回类型。
+        if deleted_record is None:
+            raise RuntimeError(
+                "删除文档后无法恢复原记录"
+            )
+
+        return deleted_record
 
     def register_document(
         self,

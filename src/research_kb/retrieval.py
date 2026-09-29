@@ -1,5 +1,6 @@
 """使用Embedding和Milvus执行证据检索。"""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import sqrt
 
@@ -45,14 +46,16 @@ class MilvusRetriever:
         self,
         query: str,
         top_k: int = DEFAULT_TOP_K,
-        source: str | None = None,
+        source: str | Sequence[str] | None = None,
     ) -> list[RetrievalResult]:
         """执行COSINE向量检索。
 
         Args:
             query: 用户问题。
             top_k: 返回的最大证据数量。
-            source: 可选的PDF文件名过滤条件。
+            source:
+                可选的单个 PDF 文件名，
+                或多个 PDF 文件名组成的序列。
 
         Returns:
             按相似度从高到低排列的检索结果。
@@ -66,21 +69,81 @@ class MilvusRetriever:
         if top_k <= 0:
             raise ValueError("top_k必须大于0")
 
-        query_vector = self.embedding_service.embed_query(query)
-
         filter_expression = ""
 
         if source is not None:
-            if not source.strip():
-                raise ValueError("source过滤条件不能为空字符串")
+            # 字符串本身也是 Sequence，
+            # isinstance 是 Python 的内置函数，用来判断"一个对象是不是某种类型
+            # 所以必须先单独判断 str。
+            if isinstance(source, str):
+                source_names = [source]
+            else:
+                source_names = list(source)
 
-            # 转义过滤表达式中的反斜杠和双引号。
-            safe_source = (
-                source
+            # 空列表表示页面没有选中任何文档。
+            # 此时必须返回空结果，不能错误地搜索全库。
+            if not source_names:
+                return []
+
+            cleaned_source_names: list[str] = []
+
+            for source_name in source_names:
+                cleaned_name = (
+                    source_name.strip()
+                )
+
+                if not cleaned_name:
+                    raise ValueError(
+                        "source 过滤条件"
+                        "不能包含空字符串"
+                    )
+
+                cleaned_source_names.append(
+                    cleaned_name
+                )
+
+            # dict.fromkeys 保留原顺序并去除重复文件名。
+            unique_source_names = list(
+                dict.fromkeys(
+                    cleaned_source_names
+                )
+            )
+
+            escaped_source_names = [
+                source_name
                 .replace("\\", "\\\\")
                 .replace('"', '\\"')
+                for source_name
+                in unique_source_names
+            ]
+
+            if len(escaped_source_names) == 1:
+                filter_expression = (
+                    'source == '
+                    f'"{escaped_source_names[0]}"'
+                )
+
+            else:
+                # Milvus 的 in 表达式允许一次限定
+                # 多个 source 字段值。
+                quoted_sources = ", ".join(
+                    f'"{source_name}"'
+                    for source_name
+                    in escaped_source_names
+                )
+
+                filter_expression = (
+                    f"source in "
+                    f"[{quoted_sources}]"
+                )
+
+        # 先完成来源校验。空来源列表会在上方直接返回，
+        # 因此不会产生一次无意义的 Embedding 调用。
+        query_vector = (
+            self.embedding_service.embed_query(
+                query
             )
-            filter_expression = f'source == "{safe_source}"'
+        )
 
         search_response = self.store.client.search(
             collection_name=self.store.collection_name,

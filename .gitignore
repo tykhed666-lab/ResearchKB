@@ -12,3 +12,4 @@ data/raw/*.pdf
 data/research_kb.db
 data/research_kb.db-shm
 data/research_kb.db-wal
+data/backups/

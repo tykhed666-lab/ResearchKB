@@ -2,7 +2,7 @@
 
 个人多模态行研资料库：上传不同行业的 PDF，检索文字与图表证据，生成带原文页码的回答，并根据美股 Ticker 查询和保存 SEC 官方披露。美股 AI 基础设施是目前的演示资料，不限制后续研究行业。
 
-项目正在向个人多源行研工作台扩展。新版定位、已完成与计划能力见[新版项目总览](docs/ResearchKB_新版项目总览.md)；后续开发安排见[第 7—14 天开发路线](docs/ResearchKB_第7至14天开发路线.md)。SEC 官方披露目录已经接入，网页正文检索和简报导出仍在后续计划中。
+项目正在向个人多源行研工作台扩展。当前架构、真实数据状态、关键取舍和第 12—14 天后续计划统一记录在[项目交接说明](docs/项目交接说明.md)。SEC 官方披露目录已经接入，网页正文检索和简报导出仍在后续计划中。
 
 ## 当前状态
 
@@ -80,25 +80,8 @@ SEC_USER_AGENT=ResearchKB your-email@example.com
 - `data/raw`：原始 PDF。
 - `data/research_kb.db`：本机 SQLite 文档登记簿，不提交 Git。
 - `data/qa`：PDF 视觉检查图片，不提交 Git。
-- `docs/样本资料清单.md`：来源、页数和首轮范围。
-- `docs/第一天记录.md`：第一天检查结果、代码关系和复盘笔记。
-- `docs/第二天复盘.md`：PDF 加载、清理、切分和证据 JSON 的复盘笔记。
-- `docs/第三天复盘.md`：Embedding、Milvus Schema、幂等入库和 Top-5 检索复盘。
-- `docs/第四天复盘.md`：结构化问答、引用校验和库内/库外评测复盘。
-- `docs/第五天复盘.md`：Streamlit 页面、PDF 上传、幂等入库和第五天验收复盘。
-- `docs/第六天复盘.md`：页面渲染、视觉描述、图像证据入库和多模态问答复盘。
-- `docs/第七天复盘.md`：跨行业通用化、统一配置和同页证据补全复盘。
-- `docs/第八天复盘.md`：SQLite 文档登记、状态管理、迁移和两层去重复盘。
-- `docs/第九天复盘.md`：研究项目、组合筛选、多来源检索、备份删除和重新入库复盘。
-- `docs/第十天复盘.md`：页码解析、视觉处理、重复跳过、部分失败和图像统计同步复盘。
-- `docs/第十一天复盘.md`：SEC Ticker/CIK 映射、申报查询、限流、外部资料登记和页面接入复盘。
-- `docs/前八天项目完整复盘与代码导读.md`：完整项目结构、分支流程和推荐读码顺序。
-- `docs/ResearchKB_新版项目总览.md`：当前能力、新定位、业务流程和技术取舍。
-- `docs/ResearchKB_第7至14天开发路线.md`：第 7—14 天的任务和验收标准。
-- `docs/2026-09-29_第七天任务.md`：跨行业通用化的分段任务与传统行业样本。
-- `docs/第1至4天总体框架与二次学习路线.md`：项目总架构、业务流程、代码关系和推荐复习顺序。
-- `docs/学习协作约定.md`：从第二天开始的手写代码、中文注释与 Git 协作方式。
-- `docs/每日复盘模板.md`：每日代码关系、数据流和面试复习模板。
+- `docs/项目交接说明.md`：唯一的项目历史、架构、数据状态、开发约束和后续计划。
+- `AGENTS.md`：提示 Codex 在修改项目前先阅读交接说明。
 - `scripts/check_day1.py`：第一天环境检查。
 - `scripts/run_streamlit.py`：供 PyCharm 普通运行按钮使用的 Streamlit 启动入口。
 - `scripts/render_chart_pages.py`：渲染首轮三张 PDF 图表页。
@@ -115,4 +98,4 @@ SEC_USER_AGENT=ResearchKB your-email@example.com
 - `src/research_kb/external_source_registry.py`：外部研究资料 SQLite 登记簿。
 - `src/research_kb`：后续业务代码。
 
-原始 PDF 只保存在本机，不上传 GitHub；仓库通过 `docs/样本资料清单.md` 记录资料来源。
+原始 PDF、SQLite、页面图片和真实 `.env` 只保存在本机，不上传 GitHub。向另一台电脑交接可运行数据时，请按照交接说明的文件清单单独复制。

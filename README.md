@@ -2,11 +2,11 @@
 
 个人多模态行研资料库：上传不同行业的 PDF，检索文字与图表证据，生成带原文页码的回答，并根据美股 Ticker 查询和保存 SEC 官方披露。美股 AI 基础设施是目前的演示资料，不限制后续研究行业。
 
-项目正在向个人多源行研工作台扩展。当前架构、真实数据状态、关键取舍和第 13—14 天后续计划统一记录在[项目交接说明](docs/项目交接说明.md)。SEC 官方披露正文已经接入混合检索，研究简报导出仍在后续计划中。
+项目正在向个人多源行研工作台扩展。当前架构、真实数据状态、关键取舍和第 14 天后续计划统一记录在[项目交接说明](docs/项目交接说明.md)。SEC 官方披露正文、混合检索和 Markdown 研究简报已经接入。
 
 ## 当前状态
 
-第十二天综合研究模式已经完成：页面根据 Ticker 查询并保存 SEC 10-K / 10-Q，用户可将主 HTML 下载、清洗、切分并写入 Milvus；问答可在“仅资料库”和“综合研究”之间切换，分别展示 PDF 页码和 SEC 官方 URL。SEC 服务异常仍不会影响本地 PDF 问答。
+第十三天研究简报已经完成：用户沿用当前项目和资料范围，输入研究问题与简报日期，系统按来源平衡召回证据，生成包含核心结论、关键事实、公司与行业对比、催化因素、风险、信息缺口和来源清单的 Markdown 文件。所有事实陈述必须通过证据 ID 校验，无引用内容会转为信息缺口。
 
 当前演示库包含 6 份 PDF 的 312 条证据，以及 Target 10-K 的 427 条 SEC 网页证据和 NVIDIA 10-K 的 500 条 SEC 网页证据，总计 1239 条 Milvus 实体。NVIDIA 原文按单份 500 条的成本上限截断，SQLite 会保留证据数量、索引时间和失败信息。
 
@@ -53,6 +53,10 @@ scripts/run_streamlit.py
 - 下载 SEC 主 HTML，排除脚本、样式和隐藏 XBRL 后切分入库。
 - 在“仅资料库”和“综合研究”之间切换，综合模式检索 PDF 与已索引 SEC 正文。
 - PDF 引用显示物理页码；SEC 引用显示报告期和官方 URL，不虚构页码。
+- 按当前项目和资料范围生成固定结构的 Markdown 研究简报。
+- 公司对比按来源平衡召回，防止单个大型 SEC 文档挤占全部结果。
+- 简报逐条校验引用 ID，自动保存到 `data/reports` 并支持页面下载。
+- 文件名包含微秒时间戳，不覆盖旧简报；无证据内容明确进入信息缺口。
 - SEC 请求声明 User-Agent、限制请求频率，并处理超时、429 和服务端错误。
 
 ## 环境检查
@@ -83,6 +87,7 @@ SEC_USER_AGENT=ResearchKB your-email@example.com
 - `data/raw`：原始 PDF。
 - `data/research_kb.db`：本机 SQLite 文档登记簿，不提交 Git。
 - `data/external`：下载的 SEC HTML 原文，不提交 Git。
+- `data/reports`：页面生成的 Markdown 研究简报，不提交 Git。
 - `data/qa`：PDF 视觉检查图片，不提交 Git。
 - `docs/项目交接说明.md`：唯一的项目历史、架构、数据状态、开发约束和后续计划。
 - `AGENTS.md`：提示 Codex 在修改项目前先阅读交接说明。
@@ -102,6 +107,7 @@ SEC_USER_AGENT=ResearchKB your-email@example.com
 - `src/research_kb/external_source_registry.py`：外部研究资料 SQLite 登记簿。
 - `src/research_kb/sec_html.py`：提取 SEC HTML 可见正文并切分证据。
 - `src/research_kb/external_ingestion.py`：SEC 下载、清洗、向量化和状态更新流程。
+- `src/research_kb/research_report.py`：平衡检索、简报结构、引用校验和 Markdown 保存。
 - `src/research_kb`：后续业务代码。
 
 原始 PDF、SQLite、页面图片和真实 `.env` 只保存在本机，不上传 GitHub。向另一台电脑交接可运行数据时，请按照交接说明的文件清单单独复制。

@@ -1,5 +1,6 @@
 """ResearchKB 的 Streamlit 演示页面。"""
 
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
@@ -25,7 +26,12 @@ from research_kb.milvus_store import MilvusStore
 from research_kb.page_renderer import (
     get_page_image_path,
 )
-from research_kb.qa import QAResult, RAGQuestionAnswerer
+from research_kb.qa import (
+    CitationValidationError,
+    QAResult,
+    RAGQuestionAnswerer,
+)
+from research_kb.research_report import ResearchReportService
 from research_kb.retrieval import (
     MilvusRetriever,
     RetrievalSourceMetadata,
@@ -66,6 +72,7 @@ def create_services() -> tuple[
     DocumentManagementService,
     VisualIngestionService,
     EvidenceIndexer,
+    ResearchReportService,
 ]:
     """创建并缓存问答、上传和文档管理服务。"""
     store = MilvusStore()
@@ -82,6 +89,11 @@ def create_services() -> tuple[
     answerer = RAGQuestionAnswerer(
         retriever=retriever,
         top_k=DEFAULT_TOP_K,
+    )
+
+    research_report_service = ResearchReportService(
+        retriever=retriever,
+        top_k=12,
     )
 
     indexer = EvidenceIndexer(
@@ -129,6 +141,7 @@ def create_services() -> tuple[
         document_manager,
         visual_ingestion_service,
         indexer,
+        research_report_service,
     )
 
 
@@ -461,6 +474,7 @@ def main() -> None:
             document_manager,
             visual_ingestion_service,
             indexer,
+            research_report_service,
         ) = create_services()
 
         entity_count = (
@@ -491,6 +505,7 @@ def main() -> None:
         service_error = str(error)
         visual_ingestion_service = None
         indexer = None
+        research_report_service = None
 
     # SEC 服务独立初始化。即使 SEC User-Agent
     # 配置不正确，本地 PDF 问答仍然可以使用。
@@ -1404,6 +1419,15 @@ def main() -> None:
             for record in indexed_sec_sources
         ]
         source_metadata = {
+            document.saved_name: RetrievalSourceMetadata(
+                source_type="pdf",
+                display_title=document.title,
+                source_date=document.report_date,
+            )
+            for document in indexed_documents
+            if document.saved_name in selected_sources
+        }
+        source_metadata.update({
             record.source_id: RetrievalSourceMetadata(
                 source_type="sec",
                 display_title=(
@@ -1417,7 +1441,7 @@ def main() -> None:
                 ),
             )
             for record in indexed_sec_sources
-        }
+        })
         query_sources = [
             *selected_sources,
             *external_source_ids,
@@ -1968,6 +1992,103 @@ def main() -> None:
             st.session_state.messages = []
             st.rerun()
 
+    # 研究简报使用当前侧边栏已经选定的项目、PDF 和 SEC 范围，
+    # 因此无需再维护一套容易不一致的资料选择控件。
+    st.subheader("研究简报")
+    st.caption(
+        "生成固定结构的Markdown简报。每条事实必须通过本轮"
+        "证据ID校验，文件保存在data/reports并可直接下载。"
+    )
+
+    selected_project = (
+        project_by_id.get(selected_project_id)
+        if selected_project_id is not None
+        else None
+    )
+    report_project_name = (
+        selected_project.name
+        if selected_project is not None
+        else "跨项目研究"
+    )
+
+    with st.form("research_report_form"):
+        report_question = st.text_area(
+            label="简报研究问题",
+            placeholder=(
+                "例如：比较所选公司在AI基础设施中的定位、"
+                "增长驱动、风险和信息缺口"
+            ),
+            height=100,
+        )
+        report_date_value = st.date_input(
+            label="简报日期",
+            value=date.today(),
+            help="该日期只用于标记本次研究成果，不会改写来源日期。",
+        )
+        st.caption(
+            f"当前项目：{report_project_name} · "
+            f"当前来源：{len(selected_sources)}份PDF + "
+            f"{len(external_source_ids)}份SEC正文"
+        )
+        generate_report = st.form_submit_button(
+            "生成研究简报",
+            disabled=(
+                research_report_service is None
+                or not query_sources
+            ),
+            use_container_width=True,
+        )
+
+    if generate_report:
+        try:
+            with st.spinner(
+                "正在检索证据、生成简报并校验全部引用……"
+            ):
+                report_result = research_report_service.generate(
+                    question=report_question,
+                    project_name=report_project_name,
+                    report_date=report_date_value.isoformat(),
+                    source=query_sources,
+                    source_metadata=source_metadata,
+                )
+            st.session_state["latest_research_report"] = (
+                report_result
+            )
+        except (ValueError, CitationValidationError) as error:
+            st.error(str(error))
+        except Exception as error:
+            st.error(
+                "研究简报生成失败，请检查模型、网络和证据范围。"
+            )
+            print(
+                "Streamlit研究简报错误："
+                f"{type(error).__name__}: {error}"
+            )
+
+    latest_report = st.session_state.get(
+        "latest_research_report"
+    )
+    if latest_report is not None:
+        with st.expander(
+            f"最新简报：{latest_report.title}",
+            expanded=True,
+        ):
+            st.markdown(latest_report.markdown)
+            st.caption(
+                f"检索证据：{latest_report.retrieved_count}条 · "
+                f"有效引用：{len(latest_report.citations)}条 · "
+                f"保存位置：{latest_report.output_path}"
+            )
+            st.download_button(
+                "下载Markdown简报",
+                data=latest_report.markdown.encode("utf-8"),
+                file_name=latest_report.output_path.name,
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+    st.divider()
+
     # 初始化聊天记录，只在第一次执行
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -2007,11 +2128,12 @@ def main() -> None:
     # PDF 文件名合并为一次明确的 Milvus 来源过滤。
     source_filter = query_sources
     source_labels = [
-        *selected_sources,
-        *[
-            metadata.display_title
-            for metadata in source_metadata.values()
-        ],
+        (
+            source_metadata[source_name].display_title
+            if source_name in source_metadata
+            else source_name
+        )
+        for source_name in query_sources
     ]
 
     user_message = {

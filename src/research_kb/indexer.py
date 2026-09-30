@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from collections.abc import Mapping
 
 from research_kb.chunker import EvidenceChunk
 from research_kb.embedding_service import EmbeddingService
@@ -67,6 +68,10 @@ class EvidenceIndexer:
         self,
         chunks: list[EvidenceChunk],
         batch_size: int = 10,
+        source_file_paths: (
+            Mapping[str, str | Path]
+            | None
+        ) = None,
     ) -> IndexingReport:
         """批量把证据写入Milvus。
 
@@ -76,6 +81,10 @@ class EvidenceIndexer:
         Args:
             chunks: 等待入库的证据。
             batch_size: 每批处理的证据数量。
+            source_file_paths:
+                可选的来源文件路径映射。PDF 不传时仍从
+                data/raw 读取；SEC HTML 等外部资料通过该映射
+                提供真实文件路径，用于计算稳定文件哈希。
 
         Returns:
             本次入库的统计报告。
@@ -93,10 +102,21 @@ class EvidenceIndexer:
         self.store.ensure_collection()
         self.store.load_collection()
 
-        # 每份PDF只计算一次文件哈希。
+        explicit_paths = {
+            source: Path(path)
+            for source, path in (
+                source_file_paths or {}
+            ).items()
+        }
+
+        # 每个来源只计算一次文件哈希。旧 PDF 调用保持兼容，
+        # 外部 HTML 则使用调用者明确传入的本地文件。
         source_hashes = {
             source: calculate_document_hash(
-                RAW_DATA_DIR / source
+                explicit_paths.get(
+                    source,
+                    RAW_DATA_DIR / source,
+                )
             )
             for source in {
                 # 提取不重复的PDF名

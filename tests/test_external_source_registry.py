@@ -1,6 +1,7 @@
 """测试外部研究资料的 SQLite 登记簿。"""
 
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -187,3 +188,55 @@ def test_invalid_status_filter_is_rejected(
         registry.list_sources(
             status="unknown"
         )
+
+
+def test_existing_table_gets_day12_columns(
+    tmp_path: Path,
+) -> None:
+    """第 11 天创建的旧表应幂等补齐正文入库字段。"""
+    database_path = tmp_path / "old.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE projects (
+                project_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE external_sources (
+                source_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                cik TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                form_type TEXT NOT NULL,
+                report_date TEXT,
+                filing_date TEXT NOT NULL,
+                accession_number TEXT NOT NULL UNIQUE,
+                primary_document TEXT NOT NULL,
+                document_url TEXT NOT NULL,
+                index_url TEXT NOT NULL,
+                collected_at TEXT NOT NULL,
+                status TEXT NOT NULL,
+                project_id TEXT
+            );
+            """
+        )
+
+    ExternalSourceRegistry(database_path)
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(external_sources)"
+            )
+        }
+
+    assert {
+        "local_path",
+        "evidence_count",
+        "indexed_at",
+        "error_message",
+    }.issubset(columns)

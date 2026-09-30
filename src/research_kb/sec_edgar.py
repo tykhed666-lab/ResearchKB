@@ -941,6 +941,117 @@ class SecEdgarClient:
             "SEC 请求失败"
         ) from last_error
 
+    def download_document(
+        self,
+        url: str,
+        max_bytes: int = 20 * 1024 * 1024,
+    ) -> bytes:
+        """下载一份 SEC 主 HTML 文档。
+
+        复用 JSON 请求相同的限流、重试和错误转换规则，
+        同时限制响应大小，避免意外把超大附件读入内存。
+        """
+        cleaned_url = url.strip()
+
+        if not cleaned_url.startswith(
+            "https://www.sec.gov/Archives/"
+        ):
+            raise ValueError(
+                "只允许下载 SEC Archives 官方文档"
+            )
+
+        if max_bytes <= 0:
+            raise ValueError(
+                "max_bytes 必须大于 0"
+            )
+
+        last_error: Exception | None = None
+
+        for attempt in range(
+            self.max_retries + 1
+        ):
+            self._wait_for_rate_limit()
+            self._last_request_time = monotonic()
+
+            try:
+                response = self._http_client.get(
+                    cleaned_url,
+                    headers=self._request_headers,
+                )
+            except httpx.TimeoutException as error:
+                last_error = error
+                if attempt >= self.max_retries:
+                    raise SecRequestError(
+                        "下载 SEC 原文超时，请稍后重试"
+                    ) from error
+                sleep(self._calculate_retry_delay(attempt))
+                continue
+            except httpx.RequestError as error:
+                last_error = error
+                if attempt >= self.max_retries:
+                    raise SecRequestError(
+                        "无法下载 SEC 原文，请检查网络"
+                    ) from error
+                sleep(self._calculate_retry_delay(attempt))
+                continue
+
+            if response.status_code == 429:
+                if attempt >= self.max_retries:
+                    raise SecRateLimitError(
+                        "SEC 请求频率受到限制，请稍后重试"
+                    )
+                sleep(
+                    self._calculate_retry_delay(
+                        attempt,
+                        response,
+                    )
+                )
+                continue
+
+            if 500 <= response.status_code < 600:
+                if attempt >= self.max_retries:
+                    raise SecRequestError(
+                        "SEC 服务暂时不可用，"
+                        f"HTTP {response.status_code}"
+                    )
+                sleep(
+                    self._calculate_retry_delay(
+                        attempt,
+                        response,
+                    )
+                )
+                continue
+
+            if response.status_code >= 400:
+                raise SecRequestError(
+                    "SEC 原文下载失败，"
+                    f"HTTP {response.status_code}"
+                )
+
+            content = response.content
+            if len(content) > max_bytes:
+                raise SecRequestError(
+                    "SEC 原文超过 20 MB 限制"
+                )
+
+            content_type = response.headers.get(
+                "Content-Type",
+                "",
+            ).lower()
+            if (
+                "html" not in content_type
+                and b"<html" not in content[:2048].lower()
+            ):
+                raise SecRequestError(
+                    "SEC 返回的主文档不是 HTML"
+                )
+
+            return content
+
+        raise SecRequestError(
+            "SEC 原文下载失败"
+        ) from last_error
+
     def load_company_mapping(
         self,
         force_refresh: bool = False,

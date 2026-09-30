@@ -13,7 +13,11 @@ from research_kb.document_registry import (
     STATUS_INDEXED,
 )
 from research_kb.embedding_service import EmbeddingService
+from research_kb.external_ingestion import (
+    ExternalIngestionService,
+)
 from research_kb.external_source_registry import (
+    EXTERNAL_STATUS_INDEXED,
     ExternalSourceRegistry,
 )
 from research_kb.indexer import EvidenceIndexer
@@ -22,7 +26,10 @@ from research_kb.page_renderer import (
     get_page_image_path,
 )
 from research_kb.qa import QAResult, RAGQuestionAnswerer
-from research_kb.retrieval import MilvusRetriever
+from research_kb.retrieval import (
+    MilvusRetriever,
+    RetrievalSourceMetadata,
+)
 from research_kb.sec_edgar import (
     SecEdgarClient,
     SecEdgarError,
@@ -58,6 +65,7 @@ def create_services() -> tuple[
     DocumentRegistry,
     DocumentManagementService,
     VisualIngestionService,
+    EvidenceIndexer,
 ]:
     """创建并缓存问答、上传和文档管理服务。"""
     store = MilvusStore()
@@ -120,6 +128,7 @@ def create_services() -> tuple[
         registry,
         document_manager,
         visual_ingestion_service,
+        indexer,
     )
 
 
@@ -163,17 +172,21 @@ def render_qa_result(result: QAResult) -> None:
         result.citations,
         start=1,
     ):
-        evidence_type = (
-            "图表证据"
-            if citation.content_type == "image"
-            else "文本证据"
-        )
+        if citation.source_type == "sec":
+            evidence_type = "SEC网页证据"
+            location = "SEC官方原文"
+        else:
+            evidence_type = (
+                "图表证据"
+                if citation.content_type == "image"
+                else "文本证据"
+            )
+            location = f"PDF第{citation.page_number}页"
 
+        title = citation.display_title or citation.source
         label = (
-            f"{index}. {citation.source} · "
-            f"PDF第{citation.page_number}页 · "
-            f"{evidence_type} · "
-            f"相似度 {citation.score:.4f}"
+            f"{index}. {title} · {location} · "
+            f"{evidence_type} · 相似度 {citation.score:.4f}"
         )
 
         with st.expander(label):
@@ -181,6 +194,20 @@ def render_qa_result(result: QAResult) -> None:
                 citation.evidence_id,
                 language=None,
             )
+
+            if (
+                citation.source_type == "sec"
+                and citation.source_url
+            ):
+                st.link_button(
+                    "打开SEC官方原文",
+                    citation.source_url,
+                    use_container_width=True,
+                )
+                if citation.source_date:
+                    st.caption(
+                        f"报告期或提交日期：{citation.source_date}"
+                    )
 
             if citation.content_type == "image":
                 image_path = get_page_image_path(
@@ -421,8 +448,8 @@ def main() -> None:
     """渲染ResearchKB页面并处理用户问题。"""
     st.title("📚 ResearchKB")
     st.caption(
-        "个人多模态行研资料库：依据已上传文档回答，"
-        "并提供原文页码。"
+        "个人多模态行研资料库：依据PDF与SEC官方披露回答，"
+        "并提供原文页码或官方链接。"
     )
 
     try:
@@ -433,6 +460,7 @@ def main() -> None:
             registry,
             document_manager,
             visual_ingestion_service,
+            indexer,
         ) = create_services()
 
         entity_count = (
@@ -462,6 +490,7 @@ def main() -> None:
         projects = []
         service_error = str(error)
         visual_ingestion_service = None
+        indexer = None
 
     # SEC 服务独立初始化。即使 SEC User-Agent
     # 配置不正确，本地 PDF 问答仍然可以使用。
@@ -482,6 +511,20 @@ def main() -> None:
         external_source_registry = None
         external_source_count = 0
         sec_service_error = str(error)
+
+    external_ingestion_service = None
+    if (
+        sec_client is not None
+        and external_source_registry is not None
+        and indexer is not None
+    ):
+        external_ingestion_service = (
+            ExternalIngestionService(
+                client=sec_client,
+                registry=external_source_registry,
+                indexer=indexer,
+            )
+        )
 
     # st.sidebar 以下内容全被渲染到左侧边框
     with st.sidebar:
@@ -1321,6 +1364,72 @@ def main() -> None:
             )
         )
 
+        research_mode = st.radio(
+            label="问答模式",
+            options=(
+                "仅资料库",
+                "综合研究",
+            ),
+            horizontal=True,
+            help=(
+                "仅资料库只使用选中的PDF；综合研究还会使用"
+                "当前项目中已完成入库的SEC官方披露。"
+            ),
+        )
+
+        indexed_sec_sources = []
+        if (
+            research_mode == "综合研究"
+            and external_source_registry is not None
+        ):
+            try:
+                indexed_sec_sources = (
+                    external_source_registry.list_sources(
+                        status=EXTERNAL_STATUS_INDEXED,
+                        project_id=selected_project_id,
+                    )
+                    if selected_project_id is not None
+                    else external_source_registry.list_sources(
+                        status=EXTERNAL_STATUS_INDEXED
+                    )
+                )
+            except Exception as error:
+                st.warning(
+                    "读取可检索SEC资料失败："
+                    f"{error}"
+                )
+
+        external_source_ids = [
+            record.source_id
+            for record in indexed_sec_sources
+        ]
+        source_metadata = {
+            record.source_id: RetrievalSourceMetadata(
+                source_type="sec",
+                display_title=(
+                    f"{record.ticker} {record.form_type} "
+                    f"({record.report_date or record.filing_date})"
+                ),
+                source_url=record.document_url,
+                source_date=(
+                    record.report_date
+                    or record.filing_date
+                ),
+            )
+            for record in indexed_sec_sources
+        }
+        query_sources = [
+            *selected_sources,
+            *external_source_ids,
+        ]
+
+        if research_mode == "综合研究":
+            st.caption(
+                "当前综合范围："
+                f"{len(selected_sources)}份PDF + "
+                f"{len(external_source_ids)}份SEC正文"
+            )
+
         if sec_action_notice:
             st.success(sec_action_notice)
 
@@ -1583,15 +1692,82 @@ def main() -> None:
                     f"{record.report_date or '未提供'}"
                     f" · 提交 {record.filing_date}"
                 )
-                st.link_button(
-                    "查看官方原文",
-                    record.document_url,
-                    use_container_width=True,
-                    key=(
-                        "open_saved_sec_"
-                        f"{record.source_id}"
+                status_text = {
+                    "saved": "已保存，尚未入库",
+                    "indexed": (
+                        f"已入库 {record.evidence_count} 条证据"
                     ),
-                )
+                    "failed": "入库失败，可重试",
+                }.get(record.status, record.status)
+                st.caption(f"状态：{status_text}")
+
+                link_column, index_column = st.columns(2)
+                with link_column:
+                    st.link_button(
+                        "查看官方原文",
+                        record.document_url,
+                        use_container_width=True,
+                        key=(
+                            "open_saved_sec_"
+                            f"{record.source_id}"
+                        ),
+                    )
+
+                with index_column:
+                    if st.button(
+                        (
+                            "正文已入库"
+                            if record.status
+                            == EXTERNAL_STATUS_INDEXED
+                            else "下载正文并入库"
+                        ),
+                        disabled=(
+                            record.status
+                            == EXTERNAL_STATUS_INDEXED
+                            or external_ingestion_service
+                            is None
+                        ),
+                        use_container_width=True,
+                        key=(
+                            "index_saved_sec_"
+                            f"{record.source_id}"
+                        ),
+                    ):
+                        try:
+                            with st.spinner(
+                                "正在下载、清洗并索引SEC正文……"
+                            ):
+                                report = (
+                                    external_ingestion_service.ingest(
+                                        record.source_id,
+                                        max_chunks=500,
+                                    )
+                                )
+
+                            truncation = (
+                                "；已达到500条成本上限"
+                                if report.truncated
+                                else ""
+                            )
+                            st.session_state[
+                                "sec_action_notice"
+                            ] = (
+                                "SEC正文入库完成："
+                                f"新增{report.inserted_count}条，"
+                                f"跳过{report.skipped_count}条"
+                                f"{truncation}。"
+                            )
+                            st.rerun()
+                        except Exception as error:
+                            st.error(
+                                "SEC正文入库失败："
+                                f"{error}"
+                            )
+
+                if record.error_message:
+                    st.warning(
+                        f"上次错误：{record.error_message}"
+                    )
 
         # SEC官方披露区域到这里结束。
 
@@ -1802,7 +1978,7 @@ def main() -> None:
     knowledge_base_ready = (
         answerer is not None
         and entity_count > 0
-        and bool(selected_sources)
+        and bool(query_sources)
     )
 
     # 用户输入的文本
@@ -1827,14 +2003,21 @@ def main() -> None:
         return
 
 
-    # selected_sources 是当前项目和筛选条件下，
-    # 用户明确选择的 PDF 文件名列表。
-    source_filter = selected_sources
+    # 综合研究模式会把已索引 SEC source_id 与用户选中的
+    # PDF 文件名合并为一次明确的 Milvus 来源过滤。
+    source_filter = query_sources
+    source_labels = [
+        *selected_sources,
+        *[
+            metadata.display_title
+            for metadata in source_metadata.values()
+        ],
+    ]
 
     user_message = {
         "role": "user",
         "content": question,
-        "source": source_filter,
+        "source": source_labels,
     }
 
     st.session_state.messages.append(user_message)
@@ -1846,6 +2029,7 @@ def main() -> None:
                 result = answerer.answer(
                     question=question,
                     source=source_filter,
+                    source_metadata=source_metadata,
                 )
 
                 assistant_message = {

@@ -1,7 +1,7 @@
 """基于Milvus检索证据生成有引用的回答。"""
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,7 +11,11 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from research_kb.settings import DEFAULT_TOP_K
-from research_kb.retrieval import MilvusRetriever, RetrievalResult
+from research_kb.retrieval import (
+    MilvusRetriever,
+    RetrievalResult,
+    RetrievalSourceMetadata,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +40,10 @@ SYSTEM_PROMPT = """
    能直接支持答案，应引用对应的 image 证据。
 10. 资料有明确报告期时，回答历史数字要说明其所属时期，
     不要把历史资料表述成最新数据。
+11. 多条证据属于不同报告期或统计口径时，必须分别说明，
+    不得直接相加、替换或混写成同一时期的结论。
+12. SEC 网页证据没有 PDF 页码，引用时按证据 ID 使用，
+    不得虚构页码。
 """.strip()
 
 
@@ -129,6 +137,10 @@ class RAGQuestionAnswerer:
         self,
         question: str,
         source: str | Sequence[str] | None = None,
+        source_metadata: (
+            Mapping[str, RetrievalSourceMetadata]
+            | None
+        ) = None,
     ) -> QAResult:
         """检索证据、生成回答并校验引用。
 
@@ -148,6 +160,7 @@ class RAGQuestionAnswerer:
             query=question,
             top_k=self.top_k,
             source=source,
+            source_metadata=source_metadata,
         )
 
         if not retrieved_results:
@@ -252,13 +265,25 @@ class RAGQuestionAnswerer:
         evidence_blocks: list[str] = []
 
         for result in results:
+            title = result.display_title or result.source
+            if result.source_type == "sec":
+                location = (
+                    "SEC官方原文："
+                    f"{result.source_url or '链接未提供'}"
+                )
+            else:
+                location = (
+                    f"PDF物理页码：{result.page_number}"
+                )
             evidence_blocks.append(
                 "\n".join(
                     [
                         f"证据ID：{result.evidence_id}",
                         f"证据类型：{result.content_type}",
-                        f"来源文件：{result.source}",
-                        f"PDF物理页码：{result.page_number}",
+                        f"来源名称：{title}",
+                        f"来源类型：{result.source_type}",
+                        f"来源日期：{result.source_date or '未提供'}",
+                        location,
                         f"相似度：{result.score:.4f}",
                         f"正文：{result.text}",
                     ]

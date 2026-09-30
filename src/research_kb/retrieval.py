@@ -1,12 +1,22 @@
 """使用Embedding和Milvus执行证据检索。"""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import sqrt
 
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.settings import DEFAULT_TOP_K
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalSourceMetadata:
+    """为 Milvus 结果补充不适合放入向量表的来源信息。"""
+
+    source_type: str
+    display_title: str
+    source_url: str | None = None
+    source_date: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,11 +30,18 @@ class RetrievalResult:
     chunk_index: int
     content_type: str
     text: str
+    source_type: str = "pdf"
+    display_title: str | None = None
+    source_url: str | None = None
+    source_date: str | None = None
 
     @property
     def citation(self) -> str:
         """生成便于展示的来源引用。"""
-        return f"{self.source}，PDF第{self.page_number}页"
+        title = self.display_title or self.source
+        if self.source_type == "sec":
+            return f"{title}，SEC 官方原文"
+        return f"{title}，PDF第{self.page_number}页"
 
 
 class MilvusRetriever:
@@ -47,6 +64,10 @@ class MilvusRetriever:
         query: str,
         top_k: int = DEFAULT_TOP_K,
         source: str | Sequence[str] | None = None,
+        source_metadata: (
+            Mapping[str, RetrievalSourceMetadata]
+            | None
+        ) = None,
     ) -> list[RetrievalResult]:
         """执行COSINE向量检索。
 
@@ -171,16 +192,42 @@ class MilvusRetriever:
 
         for hit in search_response[0]:
             entity = hit["entity"]
+            source_name = entity["source"]
+            metadata = (
+                source_metadata.get(source_name)
+                if source_metadata is not None
+                else None
+            )
 
             results.append(
                 RetrievalResult(
                     evidence_id=hit["evidence_id"],
                     score=float(hit["distance"]),
-                    source=entity["source"],
+                    source=source_name,
                     page_number=entity["page_number"],
                     chunk_index=entity["chunk_index"],
                     content_type=entity["content_type"],
                     text=entity["text"],
+                    source_type=(
+                        metadata.source_type
+                        if metadata is not None
+                        else "pdf"
+                    ),
+                    display_title=(
+                        metadata.display_title
+                        if metadata is not None
+                        else source_name
+                    ),
+                    source_url=(
+                        metadata.source_url
+                        if metadata is not None
+                        else None
+                    ),
+                    source_date=(
+                        metadata.source_date
+                        if metadata is not None
+                        else None
+                    ),
                 )
             )
 
@@ -217,6 +264,12 @@ class MilvusRetriever:
 
         # 第一条结果相似度最高，用它的来源和页码确定需要补充的页面。
         top_result = results[0]
+        # SEC 网页没有物理页码，不能套用 PDF 的同页补证据逻辑。
+        if (
+            top_result.source_type != "pdf"
+            or top_result.page_number <= 0
+        ):
+            return results
         # 获取同页的其他片段
         page_records = self.store.get_page_records(
             source=top_result.source,
@@ -242,6 +295,10 @@ class MilvusRetriever:
                 chunk_index=record["chunk_index"],
                 content_type=record["content_type"],
                 text=record["text"],
+                source_type=top_result.source_type,
+                display_title=top_result.display_title,
+                source_url=top_result.source_url,
+                source_date=top_result.source_date,
             )
             for record in page_records
         ]

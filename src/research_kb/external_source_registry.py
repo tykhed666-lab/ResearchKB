@@ -56,6 +56,10 @@ class ExternalSourceRecord:
     collected_at: str
     status: str
     project_id: str | None
+    local_path: str | None
+    evidence_count: int
+    indexed_at: str | None
+    error_message: str | None
 
 
 @dataclass(
@@ -95,7 +99,11 @@ CREATE TABLE IF NOT EXISTS external_sources (
         )
     ),
     project_id TEXT
-        REFERENCES projects(project_id)
+        REFERENCES projects(project_id),
+    local_path TEXT,
+    evidence_count INTEGER NOT NULL DEFAULT 0,
+    indexed_at TEXT,
+    error_message TEXT
 );
 
 CREATE INDEX IF NOT EXISTS
@@ -186,6 +194,28 @@ class ExternalSourceRegistry:
             connection.executescript(
                 CREATE_EXTERNAL_SOURCES_SQL
             )
+
+            # 旧数据库通过幂等迁移补齐第 12 天字段。
+            existing_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(external_sources)"
+                ).fetchall()
+            }
+            migrations = {
+                "local_path": "TEXT",
+                "evidence_count": (
+                    "INTEGER NOT NULL DEFAULT 0"
+                ),
+                "indexed_at": "TEXT",
+                "error_message": "TEXT",
+            }
+            for column_name, definition in migrations.items():
+                if column_name not in existing_columns:
+                    connection.execute(
+                        "ALTER TABLE external_sources "
+                        f"ADD COLUMN {column_name} {definition}"
+                    )
 
     @staticmethod
     def _row_to_record(
@@ -370,6 +400,10 @@ class ExternalSourceRegistry:
             project_id=(
                 cleaned_project_id
             ),
+            local_path=None,
+            evidence_count=0,
+            indexed_at=None,
+            error_message=None,
         )
 
         try:
@@ -461,6 +495,90 @@ class ExternalSourceRegistry:
             record=record,
             created=True,
         )
+
+    def mark_indexed(
+        self,
+        source_id: str,
+        local_path: str | Path,
+        evidence_count: int,
+    ) -> ExternalSourceRecord:
+        """记录外部正文已经下载并完成向量入库。"""
+        if evidence_count <= 0:
+            raise ValueError(
+                "evidence_count 必须大于 0"
+            )
+
+        path = Path(local_path).resolve()
+        indexed_at = datetime.now(
+            timezone.utc
+        ).isoformat(timespec="seconds")
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE external_sources
+                SET status = ?, local_path = ?,
+                    evidence_count = ?, indexed_at = ?,
+                    error_message = NULL
+                WHERE source_id = ?
+                """,
+                (
+                    EXTERNAL_STATUS_INDEXED,
+                    str(path),
+                    evidence_count,
+                    indexed_at,
+                    source_id.strip(),
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(
+                    f"找不到外部资料：{source_id}"
+                )
+
+        record = self.get_by_id(source_id)
+        if record is None:
+            raise RuntimeError("更新后的外部资料不存在")
+        return record
+
+    def mark_failed(
+        self,
+        source_id: str,
+        error_message: str,
+        local_path: str | Path | None = None,
+    ) -> ExternalSourceRecord:
+        """记录下载、解析或入库失败，供页面继续重试。"""
+        cleaned_error = error_message.strip()
+        if not cleaned_error:
+            raise ValueError("错误信息不能为空")
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE external_sources
+                SET status = ?, error_message = ?,
+                    local_path = COALESCE(?, local_path)
+                WHERE source_id = ?
+                """,
+                (
+                    EXTERNAL_STATUS_FAILED,
+                    cleaned_error[:1000],
+                    (
+                        str(Path(local_path).resolve())
+                        if local_path is not None
+                        else None
+                    ),
+                    source_id.strip(),
+                ),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(
+                    f"找不到外部资料：{source_id}"
+                )
+
+        record = self.get_by_id(source_id)
+        if record is None:
+            raise RuntimeError("更新后的外部资料不存在")
+        return record
 
     def list_sources(
         self,

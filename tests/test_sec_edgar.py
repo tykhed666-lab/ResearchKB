@@ -473,3 +473,42 @@ def test_user_agent_is_required(
         SecEdgarClient(
             user_agent=" ",
         )
+
+
+def test_download_document_uses_official_archive() -> None:
+    """HTML 下载复用 User-Agent，并拒绝非官方地址。"""
+    official_url = (
+        "https://www.sec.gov/Archives/edgar/data/1/demo.htm"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["User-Agent"] == (
+            "ResearchKB tests@example.com"
+        )
+        return httpx.Response(
+            status_code=200,
+            headers={"Content-Type": "text/html"},
+            content=b"<html><body>Annual report</body></html>",
+        )
+
+    http_client = httpx.Client(
+        transport=httpx.MockTransport(handler)
+    )
+    client = SecEdgarClient(
+        user_agent="ResearchKB tests@example.com",
+        max_retries=0,
+        requests_per_second=100000,
+        http_client=http_client,
+    )
+
+    try:
+        content = client.download_document(official_url)
+        assert b"Annual report" in content
+
+        with pytest.raises(
+            ValueError,
+            match="SEC Archives",
+        ):
+            client.download_document("https://example.com/report.htm")
+    finally:
+        http_client.close()

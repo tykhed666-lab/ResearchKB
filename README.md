@@ -1,14 +1,14 @@
 # ResearchKB
 
-个人多模态行研资料库：上传不同行业的 PDF，检索文字与图表证据，生成带原文页码的回答。美股 AI 基础设施是目前的演示资料，不限制后续研究行业。
+个人多模态行研资料库：上传不同行业的 PDF，检索文字与图表证据，生成带原文页码的回答，并根据美股 Ticker 查询和保存 SEC 官方披露。美股 AI 基础设施是目前的演示资料，不限制后续研究行业。
 
-项目正在向个人多源行研工作台扩展。新版定位、已完成与计划能力见[新版项目总览](docs/ResearchKB_新版项目总览.md)；后续开发安排见[第 7—14 天开发路线](docs/ResearchKB_第7至14天开发路线.md)。官方披露接入和简报导出仍在计划中。
+项目正在向个人多源行研工作台扩展。新版定位、已完成与计划能力见[新版项目总览](docs/ResearchKB_新版项目总览.md)；后续开发安排见[第 7—14 天开发路线](docs/ResearchKB_第7至14天开发路线.md)。SEC 官方披露目录已经接入，网页正文检索和简报导出仍在后续计划中。
 
 ## 当前状态
 
-第九天研究项目与文档管理已经完成：SQLite 保存项目、文档元数据、处理状态与证据统计；Milvus 保存可检索的文本和图像证据。页面可以按项目、行业、公司和报告日期组织资料，并在限定的多文档范围内问答。
+第十一天 SEC 官方披露接入已经完成：页面根据 Ticker 查询近期 10-K 和 10-Q，显示公司 CIK、报告期、提交日期和官方原文链接，并将用户选择的披露保存到 SQLite 及现有研究项目。SEC 服务与 Milvus 问答服务独立初始化，联网失败不会影响本地知识库。
 
-当前演示库包含 5 份 AI 基础设施报告和 1 份传统零售行业的 Target 年报，共有 308 条文本证据和 4 条图像证据，总计 312 条有效证据。多模态检索与问答均通过 3/3；Target 的双栏页面可以通过同页证据补全完整回答四项经营优先事项，并引用 PDF 第 4 页。
+当前演示库包含 5 份 AI 基础设施报告和 1 份传统零售行业的 Target 年报，共有 308 条文本证据和 4 条图像证据，总计 312 条有效证据。另保存了 NVIDIA 和 Target 各 1 份 SEC 10-K 官方披露。外部披露目前作为带 URL 和日期的研究目录保存，尚未进入 Milvus；第十二天会统一本地页码引用与外部 URL 引用。
 
 ## 启动网页
 
@@ -47,6 +47,10 @@ scripts/run_streamlit.py
 - 确认并备份后，同步删除向量、登记记录、PDF 和页面图片。
 - 为已上传 PDF 选择最多 5 个图表页，生成视觉描述和图像证据。
 - 重复处理已有图表页时跳过视觉模型和 Embedding 调用。
+- 根据美股 Ticker 查询 SEC 最近的 10-K 和 10-Q。
+- 展示 SEC 公司名称、CIK、报告期、提交日期、accession number 和官方原文。
+- 将 SEC 披露保存到当前研究项目，并识别重复记录。
+- SEC 请求声明 User-Agent、限制请求频率，并处理超时、429 和服务端错误。
 
 ## 环境检查
 
@@ -65,6 +69,12 @@ uv run python scripts\check_cloud_models.py
 
 如果虚拟机 IP 改变，将 `.env.example` 复制为 `.env`，只修改 `MILVUS_URI`。真实 API Key 只放在 `.env`，不要提交到 Git。
 
+SEC EDGAR 不需要 API Key，但自动访问必须在 `.env` 中声明应用名称和联系邮箱：
+
+```dotenv
+SEC_USER_AGENT=ResearchKB your-email@example.com
+```
+
 ## 目录
 
 - `data/raw`：原始 PDF。
@@ -81,6 +91,7 @@ uv run python scripts\check_cloud_models.py
 - `docs/第八天复盘.md`：SQLite 文档登记、状态管理、迁移和两层去重复盘。
 - `docs/第九天复盘.md`：研究项目、组合筛选、多来源检索、备份删除和重新入库复盘。
 - `docs/第十天复盘.md`：页码解析、视觉处理、重复跳过、部分失败和图像统计同步复盘。
+- `docs/第十一天复盘.md`：SEC Ticker/CIK 映射、申报查询、限流、外部资料登记和页面接入复盘。
 - `docs/前八天项目完整复盘与代码导读.md`：完整项目结构、分支流程和推荐读码顺序。
 - `docs/ResearchKB_新版项目总览.md`：当前能力、新定位、业务流程和技术取舍。
 - `docs/ResearchKB_第7至14天开发路线.md`：第 7—14 天的任务和验收标准。
@@ -98,6 +109,10 @@ uv run python scripts\check_cloud_models.py
 - `tests/test_document_registry.py`：文档登记与上传状态的离线自动化测试。
 - `tests/test_document_management.py`：项目隔离、组合筛选、备份删除与重新入库测试。
 - `tests/test_visual_ingestion.py`：图表页解析、视觉入库、重复跳过和越界拒绝测试。
+- `tests/test_sec_edgar.py`：SEC JSON 解析、URL、缓存、超时和限流测试。
+- `tests/test_external_source_registry.py`：外部披露保存、去重、项目外键和筛选测试。
+- `src/research_kb/sec_edgar.py`：SEC 数据模型、纯函数和官方 API 客户端。
+- `src/research_kb/external_source_registry.py`：外部研究资料 SQLite 登记簿。
 - `src/research_kb`：后续业务代码。
 
 原始 PDF 只保存在本机，不上传 GitHub；仓库通过 `docs/样本资料清单.md` 记录资料来源。

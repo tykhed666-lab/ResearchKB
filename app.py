@@ -13,6 +13,9 @@ from research_kb.document_registry import (
     STATUS_INDEXED,
 )
 from research_kb.embedding_service import EmbeddingService
+from research_kb.external_source_registry import (
+    ExternalSourceRegistry,
+)
 from research_kb.indexer import EvidenceIndexer
 from research_kb.milvus_store import MilvusStore
 from research_kb.page_renderer import (
@@ -20,6 +23,10 @@ from research_kb.page_renderer import (
 )
 from research_kb.qa import QAResult, RAGQuestionAnswerer
 from research_kb.retrieval import MilvusRetriever
+from research_kb.sec_edgar import (
+    SecEdgarClient,
+    SecEdgarError,
+)
 from research_kb.settings import DEFAULT_TOP_K
 from research_kb.upload_service import (
     PdfUploadService,
@@ -113,6 +120,22 @@ def create_services() -> tuple[
         registry,
         document_manager,
         visual_ingestion_service,
+    )
+
+
+@st.cache_resource(show_spinner=False)
+def create_sec_services() -> tuple[
+    SecEdgarClient,
+    ExternalSourceRegistry,
+]:
+    """创建并缓存 SEC 客户端和外部资料登记簿。
+
+    SEC 服务与 Milvus 问答服务分开初始化，
+    因此 SEC 配置错误不会导致本地知识库不可用。
+    """
+    return (
+        SecEdgarClient(),
+        ExternalSourceRegistry(),
     )
 
 
@@ -439,6 +462,27 @@ def main() -> None:
         projects = []
         service_error = str(error)
         visual_ingestion_service = None
+
+    # SEC 服务独立初始化。即使 SEC User-Agent
+    # 配置不正确，本地 PDF 问答仍然可以使用。
+    try:
+        (
+            sec_client,
+            external_source_registry,
+        ) = create_sec_services()
+
+        external_source_count = (
+            external_source_registry
+            .count_sources()
+        )
+        sec_service_error = None
+
+    except Exception as error:
+        sec_client = None
+        external_source_registry = None
+        external_source_count = 0
+        sec_service_error = str(error)
+
     # st.sidebar 以下内容全被渲染到左侧边框
     with st.sidebar:
         # 显示标题
@@ -451,6 +495,10 @@ def main() -> None:
         st.metric(
             label="已登记文档",
             value=len(documents),
+        )
+        st.metric(
+            label="已保存SEC披露",
+            value=external_source_count,
         )
 
         if service_error:
@@ -1257,6 +1305,295 @@ def main() -> None:
                                 "文档删除失败："
                                 f"{error}"
                             )
+
+        # SEC官方披露区域从这里开始。
+        st.divider()
+        st.subheader("SEC官方披露")
+        st.caption(
+            "输入美股Ticker，查询最近的10-K和10-Q。"
+            "查询结果来自SEC官方目录，保存后仍保留原文链接。"
+        )
+
+        sec_action_notice = (
+            st.session_state.pop(
+                "sec_action_notice",
+                None,
+            )
+        )
+
+        if sec_action_notice:
+            st.success(sec_action_notice)
+
+        if sec_service_error:
+            st.warning(
+                "SEC服务暂时不可用："
+                f"{sec_service_error}"
+            )
+
+        with st.form(
+            "sec_search_form"
+        ):
+            sec_ticker = st.text_input(
+                label="美股Ticker",
+                placeholder="例如：NVDA、TGT",
+                key="sec_search_ticker",
+            )
+
+            sec_result_limit = (
+                st.number_input(
+                    label="最多显示披露数量",
+                    min_value=1,
+                    max_value=10,
+                    value=5,
+                    step=1,
+                )
+            )
+
+            sec_search_submitted = (
+                st.form_submit_button(
+                    "查询SEC披露",
+                    disabled=(
+                        sec_client is None
+                    ),
+                    use_container_width=True,
+                )
+            )
+
+        if sec_search_submitted:
+            # 新查询开始时先清除旧结果，
+            # 避免错误发生后继续显示上一次公司。
+            st.session_state[
+                "sec_search_results"
+            ] = []
+
+            try:
+                with st.spinner(
+                    "正在查询SEC官方目录……"
+                ):
+                    sec_filings = (
+                        sec_client
+                        .get_recent_filings(
+                            ticker=sec_ticker,
+                            limit=int(
+                                sec_result_limit
+                            ),
+                        )
+                    )
+
+                st.session_state[
+                    "sec_search_results"
+                ] = sec_filings
+
+                if not sec_filings:
+                    st.info(
+                        "没有找到近期10-K或10-Q。"
+                    )
+
+            except (
+                ValueError,
+                LookupError,
+                SecEdgarError,
+            ) as error:
+                st.error(str(error))
+
+            except Exception as error:
+                st.error(
+                    "SEC查询失败，请稍后重试。"
+                )
+                print(
+                    "Streamlit SEC查询错误："
+                    f"{type(error).__name__}: "
+                    f"{error}"
+                )
+
+        sec_search_results = (
+            st.session_state.get(
+                "sec_search_results",
+                [],
+            )
+        )
+
+        if external_source_registry is None:
+            saved_sec_source_ids: set[str] = set()
+            saved_sec_sources = []
+
+        else:
+            try:
+                saved_sec_sources = (
+                    external_source_registry
+                    .list_sources()
+                )
+                saved_sec_source_ids = {
+                    record.source_id
+                    for record
+                    in saved_sec_sources
+                }
+
+            except Exception as error:
+                saved_sec_sources = []
+                saved_sec_source_ids = set()
+                st.warning(
+                    "读取已保存SEC披露失败："
+                    f"{error}"
+                )
+
+        if sec_search_results:
+            first_company = (
+                sec_search_results[0]
+                .company
+            )
+
+            st.markdown(
+                f"**{first_company.name}**"
+            )
+            st.caption(
+                f"Ticker：{first_company.ticker}"
+                f" · CIK：{first_company.cik}"
+            )
+
+            for filing in sec_search_results:
+                report_date_text = (
+                    filing.report_date
+                    or "未提供"
+                )
+
+                with st.container(
+                    border=True
+                ):
+                    st.markdown(
+                        f"**{filing.form_type}**"
+                        f" · 报告期 "
+                        f"{report_date_text}"
+                    )
+                    st.caption(
+                        "提交日期："
+                        f"{filing.filing_date}"
+                        " · Accession："
+                        f"{filing.accession_number}"
+                    )
+
+                    link_column, save_column = (
+                        st.columns(2)
+                    )
+
+                    with link_column:
+                        st.link_button(
+                            "打开SEC原文",
+                            filing.document_url,
+                            use_container_width=True,
+                        )
+
+                    already_saved = (
+                        filing.source_id
+                        in saved_sec_source_ids
+                    )
+
+                    with save_column:
+                        if st.button(
+                            (
+                                "已经保存"
+                                if already_saved
+                                else "保存到研究资料"
+                            ),
+                            disabled=(
+                                already_saved
+                                or external_source_registry
+                                is None
+                            ),
+                            use_container_width=True,
+                            key=(
+                                "save_sec_filing_"
+                                f"{filing.source_id}"
+                            ),
+                        ):
+                            try:
+                                save_result = (
+                                    external_source_registry
+                                    .save_filing(
+                                        filing=filing,
+                                        project_id=(
+                                            selected_project_id
+                                        ),
+                                    )
+                                )
+
+                                project_name = (
+                                    project_by_id[
+                                        selected_project_id
+                                    ].name
+                                    if selected_project_id
+                                    is not None
+                                    else "未分配项目"
+                                )
+
+                                if save_result.created:
+                                    notice = (
+                                        "已保存SEC披露："
+                                        f"{filing.company.ticker} "
+                                        f"{filing.form_type}"
+                                        f"，归属：{project_name}"
+                                    )
+                                else:
+                                    notice = (
+                                        "该SEC披露已经保存。"
+                                    )
+
+                                st.session_state[
+                                    "sec_action_notice"
+                                ] = notice
+                                st.rerun()
+
+                            except Exception as error:
+                                st.error(
+                                    "保存SEC披露失败："
+                                    f"{error}"
+                                )
+
+        with st.expander(
+            "已保存的SEC披露"
+        ):
+            if selected_project_id is None:
+                visible_sec_sources = (
+                    saved_sec_sources
+                )
+            else:
+                visible_sec_sources = [
+                    record
+                    for record
+                    in saved_sec_sources
+                    if (
+                        record.project_id
+                        == selected_project_id
+                    )
+                ]
+
+            if not visible_sec_sources:
+                st.info(
+                    "当前范围还没有保存SEC披露。"
+                )
+
+            for record in visible_sec_sources:
+                st.markdown(
+                    f"**{record.ticker} "
+                    f"{record.form_type}**"
+                )
+                st.caption(
+                    f"{record.company_name}"
+                    f" · 报告期 "
+                    f"{record.report_date or '未提供'}"
+                    f" · 提交 {record.filing_date}"
+                )
+                st.link_button(
+                    "查看官方原文",
+                    record.document_url,
+                    use_container_width=True,
+                    key=(
+                        "open_saved_sec_"
+                        f"{record.source_id}"
+                    ),
+                )
+
+        # SEC官方披露区域到这里结束。
 
         # PDF上传区域从这里开始。
         st.divider()

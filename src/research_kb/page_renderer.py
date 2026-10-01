@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pymupdf
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-IMAGE_ROOT = PROJECT_ROOT / "data" / "images"
+from research_kb.settings import IMAGE_ROOT
 
 DEFAULT_DPI = 144
 MIN_DPI = 72
@@ -24,6 +22,7 @@ class RenderedPage:
     width: int
     height: int
 
+
 def get_page_image_path(
     source: str,
     page_number: int,
@@ -37,11 +36,7 @@ def get_page_image_path(
     # stem就是去掉文件名后缀的意思
     source_stem = Path(source).stem
 
-    return (
-        IMAGE_ROOT
-        / source_stem
-        / f"page_{page_number:04d}.png"
-    )
+    return IMAGE_ROOT / source_stem / f"page_{page_number:04d}.png"
 
 
 def render_pdf_page(
@@ -66,33 +61,24 @@ def render_pdf_page(
     path = Path(pdf_path).resolve()
 
     if not path.is_file():
-        raise FileNotFoundError(
-            f"找不到PDF文件：{path}"
-        )
+        raise FileNotFoundError(f"找不到PDF文件：{path}")
 
     if path.suffix.lower() != ".pdf":
-        raise ValueError(
-            f"输入文件不是PDF：{path.name}"
-        )
+        raise ValueError(f"输入文件不是PDF：{path.name}")
 
     if page_number <= 0:
         raise ValueError("page_number必须大于0")
 
     if not MIN_DPI <= dpi <= MAX_DPI:
-        raise ValueError(
-            f"dpi必须在{MIN_DPI}到{MAX_DPI}之间"
-        )
+        raise ValueError(f"dpi必须在{MIN_DPI}到{MAX_DPI}之间")
 
     with pymupdf.open(path) as document:
         if document.needs_pass:
-            raise ValueError(
-                f"PDF需要密码：{path.name}"
-            )
+            raise ValueError(f"PDF需要密码：{path.name}")
 
         if page_number > document.page_count:
             raise ValueError(
-                f"PDF只有{document.page_count}页，"
-                f"无法渲染第{page_number}页"
+                f"PDF只有{document.page_count}页，无法渲染第{page_number}页"
             )
 
         # 渲染和页面展示共用同一种图片路径规则。

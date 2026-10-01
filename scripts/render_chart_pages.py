@@ -4,7 +4,6 @@ from pathlib import Path
 
 from research_kb.page_renderer import render_pdf_page
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
@@ -33,14 +32,8 @@ def main() -> None:
             dpi=144,
         )
 
-        print(
-            f"{result.source} | "
-            f"PDF第{result.page_number}页"
-        )
-        print(
-            f"图片尺寸："
-            f"{result.width}x{result.height}"
-        )
+        print(f"{result.source} | PDF第{result.page_number}页")
+        print(f"图片尺寸：{result.width}x{result.height}")
         print(f"保存位置：{result.image_path}")
         print()
 

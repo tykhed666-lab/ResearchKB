@@ -5,7 +5,6 @@ from research_kb.milvus_store import MilvusStore
 from research_kb.qa import RAGQuestionAnswerer
 from research_kb.retrieval import MilvusRetriever
 
-
 QUESTION = "NVIDIA如何描述AI基础设施的主要层级？"
 
 
@@ -30,10 +29,7 @@ def main() -> None:
     print(f"\n回答：\n{result.answer}")
 
     if result.missing_information:
-        print(
-            f"\n缺少的信息："
-            f"{result.missing_information}"
-        )
+        print(f"\n缺少的信息：{result.missing_information}")
 
     print("\n引用：")
 

@@ -1,7 +1,7 @@
 """测试外部研究资料的 SQLite 登记簿。"""
 
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -20,21 +20,15 @@ from research_kb.sec_edgar import (
 
 def build_filing(
     ticker: str = "TGT",
-    accession_number: str = (
-        "0000027419-26-000016"
-    ),
+    accession_number: str = ("0000027419-26-000016"),
     filing_date: str = "2026-03-11",
 ) -> SecFiling:
     """构造测试使用的 SEC 披露。"""
-    accession_directory = (
-        accession_number.replace("-", "")
-    )
+    accession_directory = accession_number.replace("-", "")
     cik = "0000027419"
 
     return SecFiling(
-        source_id=(
-            f"sec_{cik}_{accession_directory}"
-        ),
+        source_id=(f"sec_{cik}_{accession_directory}"),
         company=SecCompany(
             ticker=ticker,
             cik=cik,
@@ -75,9 +69,7 @@ def test_save_and_skip_duplicate(
     tmp_path: Path,
 ) -> None:
     """同一 SEC 披露重复保存时不创建新记录。"""
-    _, registry = create_registries(
-        tmp_path / "research.db"
-    )
+    _, registry = create_registries(tmp_path / "research.db")
     filing = build_filing()
 
     first = registry.save_filing(filing)
@@ -86,25 +78,17 @@ def test_save_and_skip_duplicate(
     assert first.created is True
     assert second.created is False
     assert first.record == second.record
-    assert first.record.status == (
-        EXTERNAL_STATUS_SAVED
-    )
+    assert first.record.status == (EXTERNAL_STATUS_SAVED)
     assert registry.count_sources() == 1
-    assert registry.get_by_id(
-        filing.source_id
-    ) == first.record
-    assert registry.get_by_accession_number(
-        filing.accession_number
-    ) == first.record
+    assert registry.get_by_id(filing.source_id) == first.record
+    assert registry.get_by_accession_number(filing.accession_number) == first.record
 
 
 def test_save_filing_in_project_and_filter(
     tmp_path: Path,
 ) -> None:
     """外部资料可以归入项目并按项目和Ticker筛选。"""
-    documents, registry = create_registries(
-        tmp_path / "research.db"
-    )
+    documents, registry = create_registries(tmp_path / "research.db")
     project = documents.create_project(
         name="消费零售",
         description="零售公司测试",
@@ -116,30 +100,18 @@ def test_save_filing_in_project_and_filter(
         project_id=project.project_id,
     )
 
-    assert result.record.project_id == (
-        project.project_id
-    )
-    assert registry.list_sources(
-        ticker="tgt"
-    ) == [result.record]
-    assert registry.list_sources(
-        project_id=project.project_id
-    ) == [result.record]
-    assert registry.list_sources(
-        status="saved"
-    ) == [result.record]
-    assert registry.list_sources(
-        ticker="NVDA"
-    ) == []
+    assert result.record.project_id == (project.project_id)
+    assert registry.list_sources(ticker="tgt") == [result.record]
+    assert registry.list_sources(project_id=project.project_id) == [result.record]
+    assert registry.list_sources(status="saved") == [result.record]
+    assert registry.list_sources(ticker="NVDA") == []
 
 
 def test_unknown_project_rolls_back(
     tmp_path: Path,
 ) -> None:
     """不存在的项目不能留下半条外部资料记录。"""
-    _, registry = create_registries(
-        tmp_path / "research.db"
-    )
+    _, registry = create_registries(tmp_path / "research.db")
 
     with pytest.raises(
         KeyError,
@@ -157,12 +129,8 @@ def test_invalid_date_is_rejected(
     tmp_path: Path,
 ) -> None:
     """错误日期格式应在写入数据库前被拒绝。"""
-    _, registry = create_registries(
-        tmp_path / "research.db"
-    )
-    filing = build_filing(
-        filing_date="2026/03/11"
-    )
+    _, registry = create_registries(tmp_path / "research.db")
+    filing = build_filing(filing_date="2026/03/11")
 
     with pytest.raises(
         ValueError,
@@ -177,17 +145,13 @@ def test_invalid_status_filter_is_rejected(
     tmp_path: Path,
 ) -> None:
     """不支持的状态不能进入 SQL 筛选条件。"""
-    _, registry = create_registries(
-        tmp_path / "research.db"
-    )
+    _, registry = create_registries(tmp_path / "research.db")
 
     with pytest.raises(
         ValueError,
         match="不支持的外部资料状态",
     ):
-        registry.list_sources(
-            status="unknown"
-        )
+        registry.list_sources(status="unknown")
 
 
 def test_existing_table_gets_day12_columns(
@@ -228,10 +192,7 @@ def test_existing_table_gets_day12_columns(
 
     with sqlite3.connect(database_path) as connection:
         columns = {
-            row[1]
-            for row in connection.execute(
-                "PRAGMA table_info(external_sources)"
-            )
+            row[1] for row in connection.execute("PRAGMA table_info(external_sources)")
         }
 
     assert {

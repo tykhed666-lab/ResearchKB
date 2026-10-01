@@ -67,8 +67,5 @@ def test_split_sec_text_uses_external_semantics() -> None:
     assert len(chunks) == 2
     assert all(chunk.page_number == 0 for chunk in chunks)
     assert all(chunk.content_type == "sec_html" for chunk in chunks)
-    assert all(
-        chunk.source == "sec_0000027419_demo"
-        for chunk in chunks
-    )
+    assert all(chunk.source == "sec_0000027419_demo" for chunk in chunks)
     assert "报告期 2026-01-31" in chunks[0].text

@@ -1,17 +1,13 @@
 """调用视觉模型，把PDF页面图片转换成可检索的文字描述。"""
 
 import base64
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_PATH = PROJECT_ROOT / ".env"
+from research_kb.settings import require_environment
 
 # 视觉模型先把 PDF 页面中的图表转成文字描述，
 # 后续会把这段描述作为图像证据进行向量检索。
@@ -47,27 +43,11 @@ class VisionService:
 
     def __init__(self) -> None:
         """读取环境变量并初始化视觉模型。"""
-        load_dotenv(ENV_PATH)
-
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        model_name = os.getenv("VISION_MODEL")
-
-        missing_names = [
-            name
-            for name, value in (
-                ("OPENAI_API_KEY", api_key),
-                ("OPENAI_BASE_URL", base_url),
-                ("VISION_MODEL", model_name),
-            )
-            if not value
-        ]
-
-        if missing_names:
-            missing_text = ", ".join(missing_names)
-            raise ValueError(
-                f"缺少环境变量：{missing_text}"
-            )
+        api_key, base_url, model_name = require_environment(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "VISION_MODEL",
+        )
 
         self.model_name = model_name
 
@@ -109,9 +89,7 @@ class VisionService:
             raise ValueError("page_number必须大于0")
 
         if not path.is_file():
-            raise FileNotFoundError(
-                f"找不到页面图片：{path}"
-            )
+            raise FileNotFoundError(f"找不到页面图片：{path}")
 
         image_url = self._build_data_url(path)
 
@@ -139,16 +117,12 @@ class VisionService:
         )
 
         if not isinstance(response.content, str):
-            raise ValueError(
-                "视觉模型没有返回文本描述"
-            )
+            raise ValueError("视觉模型没有返回文本描述")
 
         description = response.content.strip()
 
         if not description:
-            raise ValueError(
-                "视觉模型返回了空描述"
-            )
+            raise ValueError("视觉模型返回了空描述")
 
         return VisualDescription(
             source=source,
@@ -170,15 +144,8 @@ class VisionService:
         mime_type = mime_types.get(suffix)
 
         if mime_type is None:
-            raise ValueError(
-                f"不支持的图片格式：{suffix}"
-            )
+            raise ValueError(f"不支持的图片格式：{suffix}")
 
-        encoded_image = base64.b64encode(
-            image_path.read_bytes()
-        ).decode("ascii")
+        encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
 
-        return (
-            f"data:{mime_type};base64,"
-            f"{encoded_image}"
-        )
+        return f"data:{mime_type};base64,{encoded_image}"

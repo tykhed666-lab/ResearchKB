@@ -5,7 +5,6 @@ from pathlib import Path
 
 from research_kb.external_source_registry import (
     EXTERNAL_STATUS_INDEXED,
-    ExternalSourceRecord,
     ExternalSourceRegistry,
 )
 from research_kb.indexer import EvidenceIndexer
@@ -14,10 +13,7 @@ from research_kb.sec_html import (
     extract_visible_sec_text,
     split_sec_text_into_chunks,
 )
-from research_kb.settings import DATA_DIR
-
-
-EXTERNAL_HTML_DIR = DATA_DIR / "external" / "sec"
+from research_kb.settings import EXTERNAL_HTML_DIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +73,7 @@ class ExternalIngestionService:
         local_path = self.html_dir / f"{record.source_id}.html"
 
         try:
-            html_content = self.client.download_document(
-                record.document_url
-            )
+            html_content = self.client.download_document(record.document_url)
             local_path.write_bytes(html_content)
             visible_text = extract_visible_sec_text(html_content)
             chunks, truncated = split_sec_text_into_chunks(
@@ -102,11 +96,7 @@ class ExternalIngestionService:
             self.registry.mark_failed(
                 source_id=record.source_id,
                 error_message=str(error),
-                local_path=(
-                    local_path
-                    if local_path.exists()
-                    else None
-                ),
+                local_path=(local_path if local_path.exists() else None),
             )
             raise
 

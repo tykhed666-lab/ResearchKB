@@ -5,7 +5,6 @@ from pathlib import Path
 from research_kb.pdf_loader import load_pdf_pages
 from research_kb.text_cleaner import clean_pdf_pages
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PDF_PATH = PROJECT_ROOT / "data" / "raw" / "01_NVDA_2026_Annual_Report.pdf"
 

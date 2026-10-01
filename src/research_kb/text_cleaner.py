@@ -5,7 +5,6 @@ from dataclasses import replace
 
 from research_kb.pdf_loader import PdfPage
 
-
 # 匹配“3”“Page 3”“3 / 175”“3 of 175”等独立页码。
 # 用正则表达式来匹配pdf的页码行
 # flags=re.IGNORECASE 忽略大小写

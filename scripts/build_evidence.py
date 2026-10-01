@@ -8,15 +8,9 @@ from research_kb.chunker import EvidenceChunk, split_pages_into_chunks
 from research_kb.pdf_loader import load_pdf_pages
 from research_kb.text_cleaner import clean_pdf_pages
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
-OUTPUT_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "first_pass_evidence.json"
-)
+OUTPUT_PATH = PROJECT_ROOT / "data" / "processed" / "first_pass_evidence.json"
 
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 120
@@ -76,7 +70,7 @@ def process_document(
     pdf_path = RAW_DATA_DIR / plan.filename
     raw_pages = load_pdf_pages(pdf_path)
 
-    selected_pages = raw_pages[:plan.page_limit]
+    selected_pages = raw_pages[: plan.page_limit]
 
     if len(selected_pages) != plan.page_limit:
         raise ValueError(
@@ -107,24 +101,15 @@ def validate_chunks(chunks: list[EvidenceChunk]) -> None:
     if not chunks:
         raise ValueError("没有生成任何证据片段")
 
-    evidence_ids = [
-        chunk.evidence_id
-        for chunk in chunks
-    ]
+    evidence_ids = [chunk.evidence_id for chunk in chunks]
 
     if len(evidence_ids) != len(set(evidence_ids)):
         raise ValueError("发现重复的 evidence_id")
 
-    oversized_chunks = [
-        chunk
-        for chunk in chunks
-        if len(chunk.text) > CHUNK_SIZE
-    ]
+    oversized_chunks = [chunk for chunk in chunks if len(chunk.text) > CHUNK_SIZE]
 
     if oversized_chunks:
-        raise ValueError(
-            f"发现 {len(oversized_chunks)} 个过长证据片段"
-        )
+        raise ValueError(f"发现 {len(oversized_chunks)} 个过长证据片段")
 
 
 def main() -> None:
@@ -144,10 +129,7 @@ def main() -> None:
         # 每份文档保留前两条，共得到 10 条人工抽查样本。
         inspection_samples.extend(chunks[:2])
 
-        print(
-            f"- {plan.filename}："
-            f"{processed_pages} 页，{len(chunks)} 条证据"
-        )
+        print(f"- {plan.filename}：{processed_pages} 页，{len(chunks)} 条证据")
 
     validate_chunks(all_chunks)
 
@@ -156,10 +138,7 @@ def main() -> None:
         exist_ok=True,
     )
 
-    evidence_data = [
-        chunk.to_dict()
-        for chunk in all_chunks
-    ]
+    evidence_data = [chunk.to_dict() for chunk in all_chunks]
 
     OUTPUT_PATH.write_text(
         json.dumps(
@@ -170,10 +149,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    max_length = max(
-        len(chunk.text)
-        for chunk in all_chunks
-    )
+    max_length = max(len(chunk.text) for chunk in all_chunks)
 
     print("\n处理完成：")
     print(f"总页数：{total_pages}")

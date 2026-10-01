@@ -1,5 +1,7 @@
 """验证多模态图像证据的Top-5召回效果。"""
 
+from console_output import configure_utf8_stdout
+
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.retrieval import MilvusRetriever
@@ -7,13 +9,9 @@ from research_kb.visual_evidence import (
     build_visual_evidence_id,
 )
 
-
 TEST_CASES = (
     (
-        (
-            "NVIDIA的AI五层架构从底层到顶层"
-            "分别是什么，各层如何相互依赖？"
-        ),
+        ("NVIDIA的AI五层架构从底层到顶层分别是什么，各层如何相互依赖？"),
         "01_NVDA_2026_Annual_Report.pdf",
         3,
     ),
@@ -27,14 +25,13 @@ TEST_CASES = (
         30,
     ),
     (
-        (
-            "Seagate调查中，阻碍企业建设可持续"
-            "数据存储的前三大因素和占比分别是什么？"
-        ),
+        ("Seagate调查中，阻碍企业建设可持续数据存储的前三大因素和占比分别是什么？"),
         "05_STX_2025_Decarbonizing_Data_Report.pdf",
         11,
     ),
 )
+
+configure_utf8_stdout()
 
 
 def main() -> None:
@@ -70,10 +67,7 @@ def main() -> None:
             results,
             start=1,
         ):
-            if (
-                result.evidence_id == expected_id
-                and result.content_type == "image"
-            ):
+            if result.evidence_id == expected_id and result.content_type == "image":
                 matched_rank = rank
                 break
 
@@ -92,15 +86,9 @@ def main() -> None:
             results,
             start=1,
         ):
-            evidence_type = (
-                "图像"
-                if result.content_type == "image"
-                else "文本"
-            )
+            evidence_type = "图像" if result.content_type == "image" else "文本"
 
-            preview = " ".join(
-                result.text.split()
-            )[:120]
+            preview = " ".join(result.text.split())[:120]
 
             print(
                 f"  {rank}. "
@@ -113,10 +101,7 @@ def main() -> None:
             print(f"     {preview}")
 
     print("\n多模态检索验收：")
-    print(
-        f"通过数量："
-        f"{passed_count}/{len(TEST_CASES)}"
-    )
+    print(f"通过数量：{passed_count}/{len(TEST_CASES)}")
 
 
 if __name__ == "__main__":

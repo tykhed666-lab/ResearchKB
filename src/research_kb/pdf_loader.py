@@ -45,7 +45,7 @@ def load_pdf_pages(pdf_path: str | Path) -> list[PdfPage]:
         ValueError: 输入文件不是 PDF，或者 PDF 需要密码。
     """
     path = Path(pdf_path).resolve()
-    #.resolve() 把相对路径转成绝对路径，避免后续出现路径歧义。
+    # .resolve() 把相对路径转成绝对路径，避免后续出现路径歧义。
 
     if not path.is_file():
         raise FileNotFoundError(f"找不到 PDF 文件：{path}")

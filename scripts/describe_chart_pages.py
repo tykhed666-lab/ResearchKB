@@ -5,16 +5,10 @@ from pathlib import Path
 
 from research_kb.vision_service import VisionService
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 IMAGE_ROOT = PROJECT_ROOT / "data" / "images"
 
-OUTPUT_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "visual_descriptions.json"
-)
+OUTPUT_PATH = PROJECT_ROOT / "data" / "processed" / "visual_descriptions.json"
 
 CHART_PAGES = (
     (
@@ -43,16 +37,9 @@ def main() -> None:
         CHART_PAGES,
         start=1,
     ):
-        image_path = (
-            IMAGE_ROOT
-            / Path(source).stem
-            / f"page_{page_number:04d}.png"
-        )
+        image_path = IMAGE_ROOT / Path(source).stem / f"page_{page_number:04d}.png"
 
-        print(
-            f"\n正在分析 {index}/{len(CHART_PAGES)}："
-            f"{source}，PDF第{page_number}页"
-        )
+        print(f"\n正在分析 {index}/{len(CHART_PAGES)}：{source}，PDF第{page_number}页")
 
         result = service.describe_page(
             source=source,
@@ -61,11 +48,7 @@ def main() -> None:
         )
 
         # 把图片的绝对路径转换为相对路径
-        relative_image_path = (
-            result.image_path
-            .relative_to(PROJECT_ROOT)
-            .as_posix()
-        )
+        relative_image_path = result.image_path.relative_to(PROJECT_ROOT).as_posix()
 
         records.append(
             {

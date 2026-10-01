@@ -7,7 +7,6 @@ from pathlib import Path
 
 from streamlit.web import cli as streamlit_cli
 
-
 # app.py 位于项目根目录；使用绝对路径可避免工作目录变化导致找不到文件。
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = PROJECT_ROOT / "app.py"

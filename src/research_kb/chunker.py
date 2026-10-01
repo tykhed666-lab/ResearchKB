@@ -11,6 +11,7 @@ from research_kb.settings import (
     DEFAULT_CHUNK_SIZE,
 )
 
+
 @dataclass(frozen=True, slots=True)
 class EvidenceChunk:
     """表示一个可以存入向量数据库的证据片段。

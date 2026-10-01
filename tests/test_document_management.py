@@ -20,9 +20,7 @@ class FakeMilvusStore:
     """记录删除请求，不连接正式 Milvus。"""
 
     def __init__(self) -> None:
-        self.delete_calls: list[
-            tuple[str, str | None]
-        ] = []
+        self.delete_calls: list[tuple[str, str | None]] = []
 
     def delete_source_records(
         self,
@@ -30,15 +28,9 @@ class FakeMilvusStore:
         content_type: str | None = None,
     ) -> int:
         """模拟删除并返回删除前的证据数量。"""
-        self.delete_calls.append(
-            (source, content_type)
-        )
+        self.delete_calls.append((source, content_type))
 
-        return (
-            4
-            if content_type == "text"
-            else 5
-        )
+        return 4 if content_type == "text" else 5
 
 
 class FakeUploadService:
@@ -58,9 +50,7 @@ class FakeUploadService:
             document_id="test-document",
             saved_name=parameters["file_name"],
             total_pages=10,
-            processed_pages=(
-                parameters["max_pages"]
-            ),
+            processed_pages=(parameters["max_pages"]),
             empty_pages=0,
             evidence_chunks=4,
             inserted_chunks=4,
@@ -82,20 +72,18 @@ def register_test_document(
     report_date: str,
 ):
     """创建一条测试文档，减少测试中的重复代码。"""
-    document, created = (
-        registry.register_document(
-            document_hash=document_hash,
-            original_name=saved_name,
-            saved_name=saved_name,
-            metadata=DocumentMetadata(
-                title=title,
-                document_type="年报",
-                industry=industry,
-                company=company,
-                report_date=report_date,
-            ),
-            total_pages=10,
-        )
+    document, created = registry.register_document(
+        document_hash=document_hash,
+        original_name=saved_name,
+        saved_name=saved_name,
+        metadata=DocumentMetadata(
+            title=title,
+            document_type="年报",
+            industry=industry,
+            company=company,
+            report_date=report_date,
+        ),
+        total_pages=10,
     )
 
     assert created is True
@@ -106,16 +94,10 @@ def test_project_assignment_and_combined_filters(
     tmp_path: Path,
 ) -> None:
     """项目、行业、公司和日期能够组合限制文档范围。"""
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
 
-    ai_project = registry.create_project(
-        "AI 基础设施"
-    )
-    retail_project = registry.create_project(
-        "消费零售"
-    )
+    ai_project = registry.create_project("AI 基础设施")
+    retail_project = registry.create_project("消费零售")
 
     ai_document = register_test_document(
         registry,
@@ -153,18 +135,13 @@ def test_project_assignment_and_combined_filters(
         report_date_to="2026-12-31",
     )
 
-    assert [
-        document.document_id
-        for document in filtered
-    ] == [ai_document.document_id]
+    assert [document.document_id for document in filtered] == [ai_document.document_id]
 
     with pytest.raises(
         ValueError,
         match="项目名称已经存在",
     ):
-        registry.create_project(
-            "ai 基础设施"
-        )
+        registry.create_project("ai 基础设施")
 
 
 def test_delete_document_cleans_all_storage(
@@ -176,9 +153,7 @@ def test_delete_document_cleans_all_storage(
     raw_directory.mkdir()
     image_root.mkdir()
 
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
     document = register_test_document(
         registry,
         document_hash="c" * 64,
@@ -194,9 +169,7 @@ def test_delete_document_cleans_all_storage(
 
     image_directory = image_root / "delete"
     image_directory.mkdir()
-    (image_directory / "page_0001.png").write_bytes(
-        b"test-image"
-    )
+    (image_directory / "page_0001.png").write_bytes(b"test-image")
 
     store = FakeMilvusStore()
     service = DocumentManagementService(
@@ -208,36 +181,19 @@ def test_delete_document_cleans_all_storage(
         backup_root=tmp_path / "backups",
     )
 
-    report = service.delete_document(
-        document.document_id
-    )
+    report = service.delete_document(document.document_id)
 
-    assert store.delete_calls == [
-        ("delete.pdf", None)
-    ]
+    assert store.delete_calls == [("delete.pdf", None)]
     assert report.deleted_evidence_count == 5
-    assert (
-        report.backup_directory
-        / "document.json"
-    ).is_file()
-    assert (
-        report.backup_directory
-        / "delete.pdf"
-    ).is_file()
-    assert (
-        report.backup_directory
-        / "images"
-        / "page_0001.png"
-    ).is_file()
+    assert (report.backup_directory / "document.json").is_file()
+    assert (report.backup_directory / "delete.pdf").is_file()
+    assert (report.backup_directory / "images" / "page_0001.png").is_file()
     assert report.pdf_deleted is True
     assert report.image_directory_deleted is True
     assert report.cleanup_warnings == ()
     assert not pdf_path.exists()
     assert not image_directory.exists()
-    assert (
-        registry.get_by_id(document.document_id)
-        is None
-    )
+    assert registry.get_by_id(document.document_id) is None
 
 
 def test_reindex_replaces_only_text_evidence(
@@ -249,9 +205,7 @@ def test_reindex_replaces_only_text_evidence(
     raw_directory.mkdir()
     image_root.mkdir()
 
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
     document = register_test_document(
         registry,
         document_hash="d" * 64,
@@ -271,9 +225,7 @@ def test_reindex_replaces_only_text_evidence(
     )
 
     pdf_bytes = b"reindex-pdf"
-    (raw_directory / "reindex.pdf").write_bytes(
-        pdf_bytes
-    )
+    (raw_directory / "reindex.pdf").write_bytes(pdf_bytes)
 
     store = FakeMilvusStore()
     upload_service = FakeUploadService()
@@ -291,15 +243,11 @@ def test_reindex_replaces_only_text_evidence(
         max_pages=3,
     )
 
-    assert store.delete_calls == [
-        ("reindex.pdf", "text")
-    ]
+    assert store.delete_calls == [("reindex.pdf", "text")]
     assert report.deleted_text_count == 4
     assert len(upload_service.ingest_calls) == 1
 
-    ingest_call = (
-        upload_service.ingest_calls[0]
-    )
+    ingest_call = upload_service.ingest_calls[0]
     assert ingest_call["force_reindex"] is True
     assert ingest_call["max_pages"] == 3
     assert ingest_call["file_bytes"] == pdf_bytes

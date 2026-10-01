@@ -1,30 +1,24 @@
 """根据检索证据生成可保存、可追溯的 Markdown 研究简报。"""
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
-import os
 from pathlib import Path
-import re
 from typing import Any
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from research_kb.evidence_context import build_evidence_context
 from research_kb.qa import CitationValidationError
 from research_kb.retrieval import (
     MilvusRetriever,
     RetrievalResult,
     RetrievalSourceMetadata,
 )
-from research_kb.settings import DATA_DIR, PROJECT_ROOT
-
-
-ENV_PATH = PROJECT_ROOT / ".env"
-REPORTS_DIR = DATA_DIR / "reports"
-
+from research_kb.settings import REPORTS_DIR, require_environment
 
 REPORT_SYSTEM_PROMPT = """
 你是个人投资研究工作台的研究简报助手。
@@ -99,23 +93,11 @@ class ResearchReportService:
             self._structured_model = structured_model
             return
 
-        load_dotenv(ENV_PATH)
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        model_name = os.getenv("TEXT_MODEL")
-        missing = [
-            name
-            for name, value in (
-                ("OPENAI_API_KEY", api_key),
-                ("OPENAI_BASE_URL", base_url),
-                ("TEXT_MODEL", model_name),
-            )
-            if not value
-        ]
-        if missing:
-            raise ValueError(
-                "缺少环境变量：" + ", ".join(missing)
-            )
+        api_key, base_url, model_name = require_environment(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "TEXT_MODEL",
+        )
 
         model = ChatOpenAI(
             model=model_name,
@@ -136,10 +118,7 @@ class ResearchReportService:
         project_name: str,
         report_date: str,
         source: str | Sequence[str],
-        source_metadata: (
-            Mapping[str, RetrievalSourceMetadata]
-            | None
-        ) = None,
+        source_metadata: (Mapping[str, RetrievalSourceMetadata] | None) = None,
     ) -> ResearchReportResult:
         """生成并保存一份不会覆盖旧文件的研究简报。"""
         cleaned_question = question.strip()
@@ -149,13 +128,9 @@ class ResearchReportService:
         if not cleaned_project:
             raise ValueError("研究项目名称不能为空")
         try:
-            normalized_date = date.fromisoformat(
-                report_date.strip()
-            ).isoformat()
+            normalized_date = date.fromisoformat(report_date.strip()).isoformat()
         except ValueError as error:
-            raise ValueError(
-                "简报日期必须使用 YYYY-MM-DD"
-            ) from error
+            raise ValueError("简报日期必须使用 YYYY-MM-DD") from error
 
         results = self._retrieve_balanced(
             question=cleaned_question,
@@ -165,7 +140,10 @@ class ResearchReportService:
         if not results:
             raise ValueError("当前资料范围没有检索到证据")
 
-        context = self._build_context(results)
+        context = build_evidence_context(
+            results,
+            include_score=False,
+        )
         prompt = f"""
 研究项目：{cleaned_project}
 简报日期：{normalized_date}
@@ -184,9 +162,7 @@ class ResearchReportService:
             ]
         )
         if not isinstance(draft, ResearchReportDraft):
-            raise TypeError(
-                "结构化模型没有返回 ResearchReportDraft 类型"
-            )
+            raise TypeError("结构化模型没有返回 ResearchReportDraft 类型")
 
         # 模型偶尔会把“缺少某项资料”误放进事实章节且不附引用。
         # 这类内容不能作为事实展示，因此安全地移动到信息缺口；
@@ -219,10 +195,7 @@ class ResearchReportService:
         self,
         question: str,
         source: str | Sequence[str],
-        source_metadata: (
-            Mapping[str, RetrievalSourceMetadata]
-            | None
-        ),
+        source_metadata: (Mapping[str, RetrievalSourceMetadata] | None),
     ) -> list[RetrievalResult]:
         """按来源分别召回证据，避免大文档挤占公司对比结果。
 
@@ -233,11 +206,7 @@ class ResearchReportService:
             source_names = [source]
         else:
             source_names = list(
-                dict.fromkeys(
-                    item.strip()
-                    for item in source
-                    if item.strip()
-                )
+                dict.fromkeys(item.strip() for item in source if item.strip())
             )
         if not source_names:
             return []
@@ -288,11 +257,7 @@ class ResearchReportService:
         draft: ResearchReportDraft,
     ) -> ResearchReportDraft:
         """移除无引用陈述，并将其标题记录为信息缺口。"""
-        gaps = [
-            item.strip()
-            for item in draft.missing_information
-            if item.strip()
-        ]
+        gaps = [item.strip() for item in draft.missing_information if item.strip()]
 
         def keep_cited(
             items: list[CitedReportItem],
@@ -300,16 +265,13 @@ class ResearchReportService:
             kept: list[CitedReportItem] = []
             for item in items:
                 has_citation = any(
-                    evidence_id.strip()
-                    for evidence_id in item.cited_evidence_ids
+                    evidence_id.strip() for evidence_id in item.cited_evidence_ids
                 )
                 if has_citation:
                     kept.append(item)
                 else:
                     title = item.title.strip() or "未命名陈述"
-                    gaps.append(
-                        f"未找到足够证据支持“{title}”。"
-                    )
+                    gaps.append(f"未找到足够证据支持“{title}”。")
             return kept
 
         return ResearchReportDraft(
@@ -329,10 +291,7 @@ class ResearchReportService:
         results: list[RetrievalResult],
     ) -> tuple[RetrievalResult, ...]:
         """拒绝无引用陈述和模型编造的证据 ID。"""
-        result_by_id = {
-            result.evidence_id: result
-            for result in results
-        }
+        result_by_id = {result.evidence_id: result for result in results}
         cited_ids: list[str] = []
         for item in cls._all_items(draft):
             if not item.title.strip() or not item.content.strip():
@@ -345,54 +304,22 @@ class ResearchReportService:
                 )
             )
             if not unique_ids:
-                raise CitationValidationError(
-                    f"简报陈述没有引用证据：{item.title}"
-                )
+                raise CitationValidationError(f"简报陈述没有引用证据：{item.title}")
             invalid = [
                 evidence_id
                 for evidence_id in unique_ids
                 if evidence_id not in result_by_id
             ]
             if invalid:
-                raise CitationValidationError(
-                    f"简报引用了不存在的证据ID：{invalid}"
-                )
+                raise CitationValidationError(f"简报引用了不存在的证据ID：{invalid}")
             cited_ids.extend(unique_ids)
 
         if not cited_ids:
-            raise CitationValidationError(
-                "简报没有任何可验证的事实或引用"
-            )
+            raise CitationValidationError("简报没有任何可验证的事实或引用")
 
         return tuple(
-            result_by_id[evidence_id]
-            for evidence_id in dict.fromkeys(cited_ids)
+            result_by_id[evidence_id] for evidence_id in dict.fromkeys(cited_ids)
         )
-
-    @staticmethod
-    def _build_context(
-        results: list[RetrievalResult],
-    ) -> str:
-        blocks: list[str] = []
-        for result in results:
-            title = result.display_title or result.source
-            location = (
-                f"SEC官方原文：{result.source_url or '链接未提供'}"
-                if result.source_type == "sec"
-                else f"PDF物理页码：{result.page_number}"
-            )
-            blocks.append(
-                "\n".join(
-                    [
-                        f"证据ID：{result.evidence_id}",
-                        f"来源：{title}",
-                        f"日期：{result.source_date or '未提供'}",
-                        location,
-                        f"正文：{result.text}",
-                    ]
-                )
-            )
-        return "\n\n---\n\n".join(blocks)
 
     @staticmethod
     def _render_markdown(
@@ -469,8 +396,7 @@ class ResearchReportService:
             else:
                 location = f"PDF 第 {citation.page_number} 页"
             lines.append(
-                f"{index}. {title}，{location}；"
-                f"证据 ID：`{citation.evidence_id}`"
+                f"{index}. {title}，{location}；证据 ID：`{citation.evidence_id}`"
             )
 
         return "\n".join(lines).strip() + "\n"
@@ -481,12 +407,15 @@ class ResearchReportService:
         markdown: str,
     ) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        safe_title = re.sub(
-            r"[^0-9A-Za-z\u4e00-\u9fff]+",
-            "_",
-            title.strip(),
-        ).strip("_")[:50] or "研究简报"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe_title = (
+            re.sub(
+                r"[^0-9A-Za-z\u4e00-\u9fff]+",
+                "_",
+                title.strip(),
+            ).strip("_")[:50]
+            or "研究简报"
+        )
+        timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
         path = self.output_dir / f"{timestamp}_{safe_title}.md"
         path.write_text(markdown, encoding="utf-8")
         return path

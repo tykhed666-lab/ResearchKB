@@ -5,17 +5,9 @@ from hashlib import sha256
 from pathlib import Path
 
 from research_kb.chunker import EvidenceChunk
+from research_kb.settings import IMAGE_ROOT, PROCESSED_DIR, PROJECT_ROOT
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-IMAGE_ROOT = PROJECT_ROOT / "data" / "images"
-
-DEFAULT_DESCRIPTION_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "visual_descriptions.json"
-)
+DEFAULT_DESCRIPTION_PATH = PROCESSED_DIR / "visual_descriptions.json"
 
 # Milvus中text字段的最大长度为4096字节。
 MAX_TEXT_BYTES = 4096
@@ -30,12 +22,8 @@ def build_visual_evidence_id(
     同一份PDF的同一页始终得到相同ID，
     因此重复运行时不会重复入库。
     """
-    raw_value = (
-        f"{source}|{page_number}|image"
-    )
-    digest = sha256(
-        raw_value.encode("utf-8")
-    ).hexdigest()[:16]
+    raw_value = f"{source}|{page_number}|image"
+    digest = sha256(raw_value.encode("utf-8")).hexdigest()[:16]
 
     return f"image_{digest}"
 
@@ -64,39 +52,21 @@ def build_visual_evidence_chunk(
             Milvus text字段允许的长度。
     """
     cleaned_source = source.strip()
-    cleaned_description = (
-        description.strip()
-    )
+    cleaned_description = description.strip()
 
     if not cleaned_source:
-        raise ValueError(
-            "图像证据source不能为空"
-        )
+        raise ValueError("图像证据source不能为空")
 
     if page_number <= 0:
-        raise ValueError(
-            "图像证据页码必须大于0"
-        )
+        raise ValueError("图像证据页码必须大于0")
 
     if not cleaned_description:
-        raise ValueError(
-            "图像证据描述不能为空"
-        )
+        raise ValueError("图像证据描述不能为空")
 
-    description_bytes = len(
-        cleaned_description.encode(
-            "utf-8"
-        )
-    )
+    description_bytes = len(cleaned_description.encode("utf-8"))
 
-    if (
-        description_bytes
-        > MAX_TEXT_BYTES
-    ):
-        raise ValueError(
-            "图像证据描述超过"
-            f"{MAX_TEXT_BYTES}字节"
-        )
+    if description_bytes > MAX_TEXT_BYTES:
+        raise ValueError(f"图像证据描述超过{MAX_TEXT_BYTES}字节")
 
     return EvidenceChunk(
         evidence_id=(
@@ -107,7 +77,6 @@ def build_visual_evidence_chunk(
         ),
         source=cleaned_source,
         page_number=page_number,
-
         # 一页只生成一条综合视觉描述，
         # 因此页内序号固定为1。
         chunk_index=1,
@@ -134,23 +103,15 @@ def load_visual_evidence_chunks(
     path = Path(json_path).resolve()
 
     if not path.is_file():
-        raise FileNotFoundError(
-            f"找不到视觉描述文件：{path}"
-        )
+        raise FileNotFoundError(f"找不到视觉描述文件：{path}")
 
     try:
-        records = json.loads(
-            path.read_text(encoding="utf-8")
-        )
+        records = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
-        raise ValueError(
-            "视觉描述JSON格式不正确"
-        ) from error
+        raise ValueError("视觉描述JSON格式不正确") from error
 
     if not isinstance(records, list):
-        raise ValueError(
-            "视觉描述JSON顶层必须是列表"
-        )
+        raise ValueError("视觉描述JSON顶层必须是列表")
 
     chunks: list[EvidenceChunk] = []
     resolved_image_root = IMAGE_ROOT.resolve()
@@ -160,30 +121,18 @@ def load_visual_evidence_chunks(
         start=1,
     ):
         if not isinstance(record, dict):
-            raise ValueError(
-                f"第{record_index}条记录不是对象"
-            )
+            raise ValueError(f"第{record_index}条记录不是对象")
 
-        source = str(
-            record.get("source", "")
-        ).strip()
+        source = str(record.get("source", "")).strip()
 
-        description = str(
-            record.get("description", "")
-        ).strip()
+        description = str(record.get("description", "")).strip()
 
         try:
-            page_number = int(
-                record.get("page_number")
-            )
+            page_number = int(record.get("page_number"))
         except (TypeError, ValueError) as error:
-            raise ValueError(
-                f"第{record_index}条记录的页码无效"
-            ) from error
+            raise ValueError(f"第{record_index}条记录的页码无效") from error
 
-        image_value = str(
-            record.get("image_path", "")
-        ).strip()
+        image_value = str(record.get("image_path", "")).strip()
 
         try:
             chunk = build_visual_evidence_chunk(
@@ -192,35 +141,21 @@ def load_visual_evidence_chunks(
                 description=description,
             )
         except ValueError as error:
-            raise ValueError(
-                f"第{record_index}条记录无效："
-                f"{error}"
-            ) from error
+            raise ValueError(f"第{record_index}条记录无效：{error}") from error
 
         if not image_value:
-            raise ValueError(
-                f"第{record_index}条记录缺少image_path"
-            )
+            raise ValueError(f"第{record_index}条记录缺少image_path")
 
-        image_path = (
-            PROJECT_ROOT / image_value
-        ).resolve()
+        image_path = (PROJECT_ROOT / image_value).resolve()
 
         # 只允许引用data/images目录内的图片。
         try:
-            image_path.relative_to(
-                resolved_image_root
-            )
+            image_path.relative_to(resolved_image_root)
         except ValueError as error:
-            raise ValueError(
-                f"图片路径不在data/images中："
-                f"{image_path}"
-            ) from error
+            raise ValueError(f"图片路径不在data/images中：{image_path}") from error
 
         if not image_path.is_file():
-            raise FileNotFoundError(
-                f"找不到视觉证据图片：{image_path}"
-            )
+            raise FileNotFoundError(f"找不到视觉证据图片：{image_path}")
 
         chunks.append(chunk)
 

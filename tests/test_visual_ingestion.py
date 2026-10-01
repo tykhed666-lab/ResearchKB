@@ -29,9 +29,7 @@ class FakeVisualStore:
         self,
         existing_ids: set[str] | None = None,
     ) -> None:
-        self.existing_ids = (
-            existing_ids or set()
-        )
+        self.existing_ids = existing_ids or set()
         self.id_queries: list[list[str]] = []
 
     def get_existing_ids(
@@ -39,9 +37,7 @@ class FakeVisualStore:
         evidence_ids: list[str],
     ) -> set[str]:
         self.id_queries.append(evidence_ids)
-        return self.existing_ids.intersection(
-            evidence_ids
-        )
+        return self.existing_ids.intersection(evidence_ids)
 
     def get_source_statistics(
         self,
@@ -66,10 +62,7 @@ class FakeVisualIndexer:
         chunks,
         batch_size: int = 10,
     ) -> IndexingReport:
-        self.indexed_pages.extend(
-            chunk.page_number
-            for chunk in chunks
-        )
+        self.indexed_pages.extend(chunk.page_number for chunk in chunks)
         return IndexingReport(
             total_chunks=len(chunks),
             inserted_chunks=len(chunks),
@@ -92,17 +85,13 @@ class FakeVisionService:
         self.called_pages.append(page_number)
 
         if page_number == 3:
-            raise RuntimeError(
-                "模拟视觉模型失败"
-            )
+            raise RuntimeError("模拟视觉模型失败")
 
         return VisualDescription(
             source=source,
             page_number=page_number,
             image_path=Path(image_path),
-            description=(
-                f"第{page_number}页图表描述"
-            ),
+            description=(f"第{page_number}页图表描述"),
         )
 
 
@@ -117,26 +106,19 @@ def create_indexed_document(
     raw_directory = tmp_path / "raw"
     raw_directory.mkdir()
 
-    pdf_path = (
-        raw_directory
-        / "test_visual.pdf"
-    )
+    pdf_path = raw_directory / "test_visual.pdf"
     pdf_path.write_bytes(b"fake-pdf")
 
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
-    document, _ = (
-        registry.register_document(
-            document_hash="f" * 64,
-            original_name=pdf_path.name,
-            saved_name=pdf_path.name,
-            metadata=DocumentMetadata(
-                title="视觉测试",
-                document_type="年报",
-            ),
-            total_pages=4,
-        )
+    registry = DocumentRegistry(tmp_path / "registry.db")
+    document, _ = registry.register_document(
+        document_hash="f" * 64,
+        original_name=pdf_path.name,
+        saved_name=pdf_path.name,
+        metadata=DocumentMetadata(
+            title="视觉测试",
+            document_type="年报",
+        ),
+        total_pages=4,
     )
     registry.mark_indexed(
         document_id=document.document_id,
@@ -155,12 +137,8 @@ def create_indexed_document(
 
 def test_parse_page_numbers() -> None:
     """单页、范围、中文逗号和去重都能正确解析。"""
-    assert parse_page_numbers(
-        "3，7-9"
-    ) == [3, 7, 8, 9]
-    assert parse_page_numbers(
-        "3, 3, 2-4"
-    ) == [3, 2, 4]
+    assert parse_page_numbers("3，7-9") == [3, 7, 8, 9]
+    assert parse_page_numbers("3, 3, 2-4") == [3, 2, 4]
     assert parse_page_numbers("") == []
 
     for invalid_value in (
@@ -171,9 +149,7 @@ def test_parse_page_numbers() -> None:
         "1-6",
     ):
         with pytest.raises(ValueError):
-            parse_page_numbers(
-                invalid_value
-            )
+            parse_page_numbers(invalid_value)
 
 
 def test_visual_ingestion_skips_and_continues(
@@ -186,15 +162,11 @@ def test_visual_ingestion_skips_and_continues(
         raw_directory,
     ) = create_indexed_document(tmp_path)
 
-    existing_id = (
-        build_visual_evidence_id(
-            source="test_visual.pdf",
-            page_number=1,
-        )
+    existing_id = build_visual_evidence_id(
+        source="test_visual.pdf",
+        page_number=1,
     )
-    store = FakeVisualStore(
-        {existing_id}
-    )
+    store = FakeVisualStore({existing_id})
     indexer = FakeVisualIndexer()
     vision_service = FakeVisionService()
     image_directory = tmp_path / "images"
@@ -204,10 +176,7 @@ def test_visual_ingestion_skips_and_continues(
         pdf_path: str | Path,
         page_number: int,
     ) -> RenderedPage:
-        image_path = (
-            image_directory
-            / f"page_{page_number:04d}.png"
-        )
+        image_path = image_directory / f"page_{page_number:04d}.png"
         image_path.write_bytes(b"png")
         return RenderedPage(
             source=Path(pdf_path).name,
@@ -241,9 +210,7 @@ def test_visual_ingestion_skips_and_continues(
     ]
     assert indexer.indexed_pages == [2]
 
-    updated = registry.get_by_id(
-        document_id
-    )
+    updated = registry.get_by_id(document_id)
     assert updated is not None
     assert updated.image_chunk_count == 2
     assert updated.text_chunk_count == 12
@@ -268,9 +235,7 @@ def test_out_of_range_page_has_no_external_calls(
         pdf_path: str | Path,
         page_number: int,
     ) -> RenderedPage:
-        raise AssertionError(
-            "越界时不应调用渲染器"
-        )
+        raise AssertionError("越界时不应调用渲染器")
 
     service = VisualIngestionService(
         store=store,
@@ -293,4 +258,3 @@ def test_out_of_range_page_has_no_external_calls(
     assert store.id_queries == []
     assert vision_service.called_pages == []
     assert indexer.indexed_pages == []
-

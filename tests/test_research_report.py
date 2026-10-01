@@ -36,9 +36,7 @@ def build_results() -> list[RetrievalResult]:
             text="Target SEC risk evidence.",
             source_type="sec",
             display_title="TGT 10-K (2026-01-31)",
-            source_url=(
-                "https://www.sec.gov/Archives/target.htm"
-            ),
+            source_url=("https://www.sec.gov/Archives/target.htm"),
             source_date="2026-01-31",
         ),
     ]
@@ -136,9 +134,7 @@ def test_report_rejects_unknown_evidence_id(
     service = ResearchReportService(
         retriever=FakeRetriever(build_results()),
         output_dir=tmp_path,
-        structured_model=FakeStructuredModel(
-            build_draft("invented_id")
-        ),
+        structured_model=FakeStructuredModel(build_draft("invented_id")),
     )
 
     with pytest.raises(

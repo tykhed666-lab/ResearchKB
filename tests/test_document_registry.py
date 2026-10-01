@@ -8,10 +8,10 @@ import pytest
 import research_kb.upload_service as upload_module
 from research_kb.chunker import EvidenceChunk
 from research_kb.document_registry import (
-    DocumentMetadata,
-    DocumentRegistry,
     STATUS_FAILED,
     STATUS_INDEXED,
+    DocumentMetadata,
+    DocumentRegistry,
 )
 from research_kb.indexer import (
     EvidenceIndexer,
@@ -57,9 +57,7 @@ class FailingIndexer(EvidenceIndexer):
         batch_size: int = 10,
     ) -> IndexingReport:
         """抛出固定异常，检查失败状态。"""
-        raise RuntimeError(
-            "模拟向量数据库连接失败"
-        )
+        raise RuntimeError("模拟向量数据库连接失败")
 
 
 def create_test_pdf() -> bytes:
@@ -71,10 +69,7 @@ def create_test_pdf() -> bytes:
 
         page.insert_text(
             (72, 72),
-            (
-                "Example company annual report. "
-                "Revenue increased in 2025."
-            ),
+            ("Example company annual report. Revenue increased in 2025."),
         )
 
         return document.tobytes()
@@ -87,9 +82,7 @@ def test_registry_deduplicates_and_updates_status(
     tmp_path: Path,
 ) -> None:
     """相同哈希只登记一次，并能更新处理状态。"""
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
 
     metadata = DocumentMetadata(
         title="测试年报",
@@ -100,36 +93,28 @@ def test_registry_deduplicates_and_updates_status(
         report_date="2025-12-31",
     )
 
-    first, first_created = (
-        registry.register_document(
-            document_hash="a" * 64,
-            original_name="report.pdf",
-            saved_name="report.pdf",
-            metadata=metadata,
-            total_pages=100,
-        )
+    first, first_created = registry.register_document(
+        document_hash="a" * 64,
+        original_name="report.pdf",
+        saved_name="report.pdf",
+        metadata=metadata,
+        total_pages=100,
     )
 
-    second, second_created = (
-        registry.register_document(
-            document_hash="a" * 64,
-            original_name="copy.pdf",
-            saved_name="copy.pdf",
-            metadata=metadata,
-            total_pages=100,
-        )
+    second, second_created = registry.register_document(
+        document_hash="a" * 64,
+        original_name="copy.pdf",
+        saved_name="copy.pdf",
+        metadata=metadata,
+        total_pages=100,
     )
 
     assert first_created is True
     assert second_created is False
     assert first.document_id == second.document_id
-    assert len(
-        registry.list_documents()
-    ) == 1
+    assert len(registry.list_documents()) == 1
 
-    registry.mark_processing(
-        first.document_id
-    )
+    registry.mark_processing(first.document_id)
 
     registry.mark_indexed(
         document_id=first.document_id,
@@ -139,9 +124,7 @@ def test_registry_deduplicates_and_updates_status(
         image_chunk_count=2,
     )
 
-    indexed = registry.get_by_id(
-        first.document_id
-    )
+    indexed = registry.get_by_id(first.document_id)
 
     assert indexed is not None
     assert indexed.status == STATUS_INDEXED
@@ -165,9 +148,7 @@ def test_upload_skips_duplicate_document(
         raw_directory,
     )
 
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
 
     fake_indexer = FakeIndexer()
 
@@ -211,14 +192,9 @@ def test_upload_skips_duplicate_document(
     assert fake_indexer.call_count == 1
 
     # 相同内容即使文件名不同，也只有一条文档记录。
-    assert len(
-        registry.list_documents()
-    ) == 1
+    assert len(registry.list_documents()) == 1
 
-    assert (
-        first_report.document_id
-        == second_report.document_id
-    )
+    assert first_report.document_id == second_report.document_id
 
 
 def test_upload_failure_is_saved(
@@ -232,9 +208,7 @@ def test_upload_failure_is_saved(
         tmp_path / "raw",
     )
 
-    registry = DocumentRegistry(
-        tmp_path / "registry.db"
-    )
+    registry = DocumentRegistry(tmp_path / "registry.db")
 
     upload_service = PdfUploadService(
         indexer=FailingIndexer(),
@@ -260,7 +234,4 @@ def test_upload_failure_is_saved(
     assert len(documents) == 1
     assert documents[0].status == STATUS_FAILED
     assert documents[0].error_message is not None
-    assert (
-        "模拟向量数据库连接失败"
-        in documents[0].error_message
-    )
+    assert "模拟向量数据库连接失败" in documents[0].error_message

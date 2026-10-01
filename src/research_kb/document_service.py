@@ -1,10 +1,10 @@
 """统一协调文档删除与重新入库。"""
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import shutil
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from research_kb.document_registry import (
     DocumentMetadata,
@@ -25,12 +25,7 @@ from research_kb.upload_service import (
     UploadReport,
 )
 
-
-DEFAULT_DOCUMENT_BACKUP_ROOT = (
-    DATA_DIR
-    / "backups"
-    / "deleted_documents"
-)
+DEFAULT_DOCUMENT_BACKUP_ROOT = DATA_DIR / "backups" / "deleted_documents"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,24 +74,16 @@ class DocumentManagementService:
         upload_service: PdfUploadService,
         raw_data_dir: str | Path = RAW_DATA_DIR,
         image_root: str | Path = IMAGE_ROOT,
-        backup_root: str | Path = (
-            DEFAULT_DOCUMENT_BACKUP_ROOT
-        ),
+        backup_root: str | Path = (DEFAULT_DOCUMENT_BACKUP_ROOT),
     ) -> None:
         self.store = store
         self.registry = registry
         self.upload_service = upload_service
 
         # Path统一处理Windows和Linux路径。
-        self.raw_data_dir = Path(
-            raw_data_dir
-        )
-        self.image_root = Path(
-            image_root
-        )
-        self.backup_root = Path(
-            backup_root
-        )
+        self.raw_data_dir = Path(raw_data_dir)
+        self.image_root = Path(image_root)
+        self.backup_root = Path(backup_root)
 
     def _create_deletion_backup(
         self,
@@ -108,17 +95,8 @@ class DocumentManagementService:
 
         备份失败时抛出异常，使后续删除不会开始。
         """
-        timestamp = (
-            datetime.now(timezone.utc)
-            .strftime("%Y%m%dT%H%M%SZ")
-        )
-        backup_directory = (
-            self.backup_root
-            / (
-                f"{timestamp}_"
-                f"{record.document_id}"
-            )
-        )
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup_directory = self.backup_root / (f"{timestamp}_{record.document_id}")
 
         try:
             backup_directory.mkdir(
@@ -128,10 +106,7 @@ class DocumentManagementService:
 
             # 即使本地PDF或图片已经缺失，也保留SQLite
             # 元数据，方便定位和人工恢复。
-            metadata_path = (
-                backup_directory
-                / "document.json"
-            )
+            metadata_path = backup_directory / "document.json"
             metadata_path.write_text(
                 json.dumps(
                     asdict(record),
@@ -144,15 +119,13 @@ class DocumentManagementService:
             if pdf_path.is_file():
                 shutil.copy2(
                     pdf_path,
-                    backup_directory
-                    / pdf_path.name,
+                    backup_directory / pdf_path.name,
                 )
 
             if image_directory.is_dir():
                 shutil.copytree(
                     image_directory,
-                    backup_directory
-                    / "images",
+                    backup_directory / "images",
                 )
 
         except Exception as error:
@@ -163,10 +136,7 @@ class DocumentManagementService:
                     ignore_errors=True,
                 )
 
-            raise RuntimeError(
-                "删除前备份失败，已取消删除："
-                f"{error}"
-            ) from error
+            raise RuntimeError(f"删除前备份失败，已取消删除：{error}") from error
 
         return backup_directory
 
@@ -185,57 +155,34 @@ class DocumentManagementService:
         SQLite删除失败时会保留本地PDF，
         以后仍然可以重新执行入库。
         """
-        record = self.registry.get_by_id(
-            document_id
-        )
+        record = self.registry.get_by_id(document_id)
 
         if record is None:
-            raise KeyError(
-                "找不到文档："
-                f"{document_id}"
-            )
+            raise KeyError(f"找不到文档：{document_id}")
 
         # Path.name移除可能存在的目录部分，
         # 防止路径离开data/raw。
-        safe_saved_name = Path(
-            record.saved_name
-        ).name
+        safe_saved_name = Path(record.saved_name).name
 
-        pdf_path = (
-            self.raw_data_dir
-            / safe_saved_name
-        )
+        pdf_path = self.raw_data_dir / safe_saved_name
 
-        image_directory = (
-            self.image_root
-            / Path(safe_saved_name).stem
-        )
+        image_directory = self.image_root / Path(safe_saved_name).stem
 
         # 先创建可恢复备份。任何备份错误都会中止删除，
         # 因而不会出现“数据已删但备份不完整”。
-        backup_directory = (
-            self._create_deletion_backup(
-                record=record,
-                pdf_path=pdf_path,
-                image_directory=(
-                    image_directory
-                ),
-            )
+        backup_directory = self._create_deletion_backup(
+            record=record,
+            pdf_path=pdf_path,
+            image_directory=(image_directory),
         )
 
         # Milvus中的source保存的是saved_name，
         # 因此必须用保存后的文件名删除证据。
-        deleted_evidence_count = (
-            self.store.delete_source_records(
-                record.saved_name
-            )
-        )
+        deleted_evidence_count = self.store.delete_source_records(record.saved_name)
 
         # 先完成核心业务数据删除，再清理原始文件。
         # 如果这里失败，本地PDF和备份仍然保留。
-        self.registry.delete_document(
-            record.document_id
-        )
+        self.registry.delete_document(record.document_id)
 
         pdf_deleted = False
         image_directory_deleted = False
@@ -247,42 +194,24 @@ class DocumentManagementService:
                 pdf_deleted = True
 
         except OSError as error:
-            cleanup_warnings.append(
-                "PDF文件清理失败："
-                f"{error}"
-            )
+            cleanup_warnings.append(f"PDF文件清理失败：{error}")
 
         try:
             if image_directory.is_dir():
-                shutil.rmtree(
-                    image_directory
-                )
-                image_directory_deleted = (
-                    True
-                )
+                shutil.rmtree(image_directory)
+                image_directory_deleted = True
 
         except OSError as error:
-            cleanup_warnings.append(
-                "页面图片清理失败："
-                f"{error}"
-            )
+            cleanup_warnings.append(f"页面图片清理失败：{error}")
 
         return DeleteDocumentReport(
             document_id=record.document_id,
             saved_name=record.saved_name,
-            deleted_evidence_count=(
-                deleted_evidence_count
-            ),
-            backup_directory=(
-                backup_directory
-            ),
+            deleted_evidence_count=(deleted_evidence_count),
+            backup_directory=(backup_directory),
             pdf_deleted=pdf_deleted,
-            image_directory_deleted=(
-                image_directory_deleted
-            ),
-            cleanup_warnings=tuple(
-                cleanup_warnings
-            ),
+            image_directory_deleted=(image_directory_deleted),
+            cleanup_warnings=tuple(cleanup_warnings),
         )
 
     def reindex_document(
@@ -295,52 +224,32 @@ class DocumentManagementService:
         图像证据不会被删除，因为生成视觉描述
         需要额外调用视觉模型。
         """
-        record = self.registry.get_by_id(
-            document_id
-        )
+        record = self.registry.get_by_id(document_id)
 
         if record is None:
-            raise KeyError(
-                "找不到文档："
-                f"{document_id}"
-            )
+            raise KeyError(f"找不到文档：{document_id}")
 
-        safe_saved_name = Path(
-            record.saved_name
-        ).name
+        safe_saved_name = Path(record.saved_name).name
 
-        pdf_path = (
-            self.raw_data_dir
-            / safe_saved_name
-        )
+        pdf_path = self.raw_data_dir / safe_saved_name
 
         if not pdf_path.is_file():
-            raise FileNotFoundError(
-                "找不到文档对应的本地PDF："
-                f"{pdf_path}"
-            )
+            raise FileNotFoundError(f"找不到文档对应的本地PDF：{pdf_path}")
 
         effective_max_pages = (
             max_pages
             if max_pages is not None
-            else (
-                record.processed_pages
-                or DEFAULT_MAX_PAGES
-            )
+            else (record.processed_pages or DEFAULT_MAX_PAGES)
         )
 
         if effective_max_pages <= 0:
-            raise ValueError(
-                "重新入库页数必须大于0"
-            )
+            raise ValueError("重新入库页数必须大于0")
 
         # 只清理文本证据，保留已经生成的
         # 图表视觉描述及对应图片。
-        deleted_text_count = (
-            self.store.delete_source_records(
-                source=record.saved_name,
-                content_type="text",
-            )
+        deleted_text_count = self.store.delete_source_records(
+            source=record.saved_name,
+            content_type="text",
         )
 
         metadata = DocumentMetadata(
@@ -348,33 +257,23 @@ class DocumentManagementService:
             company=record.company,
             ticker=record.ticker,
             industry=record.industry,
-            document_type=(
-                record.document_type
-            ),
+            document_type=(record.document_type),
             report_date=record.report_date,
         )
 
         # force_reindex跳过“文档已经入库”的快速返回，
         # 重新执行PDF解析、切分、Embedding和Milvus写入。
-        upload_report = (
-            self.upload_service.ingest_pdf(
-                file_name=record.saved_name,
-                file_bytes=(
-                    pdf_path.read_bytes()
-                ),
-                metadata=metadata,
-                max_pages=(
-                    effective_max_pages
-                ),
-                force_reindex=True,
-            )
+        upload_report = self.upload_service.ingest_pdf(
+            file_name=record.saved_name,
+            file_bytes=(pdf_path.read_bytes()),
+            metadata=metadata,
+            max_pages=(effective_max_pages),
+            force_reindex=True,
         )
 
         return ReindexDocumentReport(
             document_id=record.document_id,
             saved_name=record.saved_name,
-            deleted_text_count=(
-                deleted_text_count
-            ),
+            deleted_text_count=(deleted_text_count),
             upload_report=upload_report,
         )

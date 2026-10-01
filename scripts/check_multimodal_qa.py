@@ -1,5 +1,7 @@
 """验证多模态RAG回答是否正确引用图像证据。"""
 
+from console_output import configure_utf8_stdout
+
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.qa import RAGQuestionAnswerer
@@ -8,13 +10,9 @@ from research_kb.visual_evidence import (
     build_visual_evidence_id,
 )
 
-
 TEST_CASES = (
     (
-        (
-            "NVIDIA的AI五层架构从底层到顶层"
-            "分别是什么，各层如何相互依赖？"
-        ),
+        ("NVIDIA的AI五层架构从底层到顶层分别是什么，各层如何相互依赖？"),
         "01_NVDA_2026_Annual_Report.pdf",
         3,
     ),
@@ -28,14 +26,13 @@ TEST_CASES = (
         30,
     ),
     (
-        (
-            "Seagate调查中，阻碍企业建设可持续"
-            "数据存储的前三大因素和占比分别是什么？"
-        ),
+        ("Seagate调查中，阻碍企业建设可持续数据存储的前三大因素和占比分别是什么？"),
         "05_STX_2025_Decarbonizing_Data_Report.pdf",
         11,
     ),
 )
+
+configure_utf8_stdout()
 
 
 def main() -> None:
@@ -73,25 +70,16 @@ def main() -> None:
 
         result = answerer.answer(question)
 
-        cited_ids = {
-            citation.evidence_id
-            for citation in result.citations
-        }
+        cited_ids = {citation.evidence_id for citation in result.citations}
 
         image_cited = expected_id in cited_ids
 
-        passed = (
-            not result.insufficient_information
-            and image_cited
-        )
+        passed = not result.insufficient_information and image_cited
 
         if passed:
             passed_count += 1
 
-        print(
-            f"信息是否不足："
-            f"{result.insufficient_information}"
-        )
+        print(f"信息是否不足：{result.insufficient_information}")
         print(f"是否引用预期图像：{image_cited}")
         print(f"本题是否通过：{passed}")
         print(f"\n回答：\n{result.answer}")
@@ -107,10 +95,7 @@ def main() -> None:
             )
 
     print("\n多模态问答验收：")
-    print(
-        f"通过数量："
-        f"{passed_count}/{len(TEST_CASES)}"
-    )
+    print(f"通过数量：{passed_count}/{len(TEST_CASES)}")
 
 
 if __name__ == "__main__":

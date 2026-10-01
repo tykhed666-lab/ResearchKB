@@ -1,15 +1,15 @@
 """使用 SQLite 管理文档元数据和处理状态。"""
+
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
 
 from research_kb.settings import DOCUMENT_DATABASE_PATH
-
 
 STATUS_SAVED: Final = "saved"
 STATUS_PROCESSING: Final = "processing"
@@ -135,9 +135,7 @@ class DocumentRegistry:
             timeout=10,
         )
         connection.row_factory = sqlite3.Row
-        connection.execute(
-            "PRAGMA foreign_keys = ON"
-        )
+        connection.execute("PRAGMA foreign_keys = ON")
 
         try:
             # yield 把连接临时交给 with 代码块使用。
@@ -168,20 +166,14 @@ class DocumentRegistry:
         with self._connect() as connection:
             # documents 的外键指向 projects，
             # 所以先确保 projects 表存在。
-            connection.executescript(
-                CREATE_PROJECTS_SQL
-            )
+            connection.executescript(CREATE_PROJECTS_SQL)
 
-            connection.executescript(
-                CREATE_DOCUMENTS_SQL
-            )
+            connection.executescript(CREATE_DOCUMENTS_SQL)
 
             # PRAGMA table_info 返回表中的字段信息。
             columns = {
                 row["name"]
-                for row in connection.execute(
-                    "PRAGMA table_info(documents)"
-                ).fetchall()
+                for row in connection.execute("PRAGMA table_info(documents)").fetchall()
             }
 
             # CREATE TABLE IF NOT EXISTS 不会修改旧表，
@@ -231,7 +223,7 @@ class DocumentRegistry:
 
         report_date = cls._optional_text(metadata.report_date)
         if report_date is not None:
-            try: # 验证报告日期格式，返回 date(2026, 9, 28)
+            try:  # 验证报告日期格式，返回 date(2026, 9, 28)
                 date.fromisoformat(report_date)
             except ValueError as error:
                 # 如果格式错误则抛出异常，date.fromisoformat("2026/09/28")
@@ -308,132 +300,71 @@ class DocumentRegistry:
         parameters: list[str] = []
 
         if status is not None:
-            if (
-                status
-                not in VALID_DOCUMENT_STATUSES
-            ):
-                raise ValueError(
-                    f"不支持的文档状态：{status}"
-                )
+            if status not in VALID_DOCUMENT_STATUSES:
+                raise ValueError(f"不支持的文档状态：{status}")
 
-            conditions.append(
-                "status = ?"
-            )
+            conditions.append("status = ?")
             parameters.append(status)
 
         if project_id is not None:
-            cleaned_project_id = (
-                project_id.strip()
-            )
+            cleaned_project_id = project_id.strip()
 
             if not cleaned_project_id:
-                raise ValueError(
-                    "project_id 不能为空字符串"
-                )
+                raise ValueError("project_id 不能为空字符串")
 
-            conditions.append(
-                "project_id = ?"
-            )
-            parameters.append(
-                cleaned_project_id
-            )
+            conditions.append("project_id = ?")
+            parameters.append(cleaned_project_id)
 
-        normalized_industry = (
-            self._optional_text(industry)
-        )
+        normalized_industry = self._optional_text(industry)
 
         if normalized_industry is not None:
-            conditions.append(
-                "industry = ?"
-            )
-            parameters.append(
-                normalized_industry
-            )
+            conditions.append("industry = ?")
+            parameters.append(normalized_industry)
 
-        normalized_company = (
-            self._optional_text(company)
-        )
+        normalized_company = self._optional_text(company)
 
         if normalized_company is not None:
-            conditions.append(
-                "company = ?"
-            )
-            parameters.append(
-                normalized_company
-            )
+            conditions.append("company = ?")
+            parameters.append(normalized_company)
 
-        normalized_date_from = (
-            self._optional_text(
-                report_date_from
-            )
-        )
+        normalized_date_from = self._optional_text(report_date_from)
 
-        normalized_date_to = (
-            self._optional_text(
-                report_date_to
-            )
-        )
+        normalized_date_to = self._optional_text(report_date_to)
 
         # SQLite 使用 ISO 日期字符串时，
         # YYYY-MM-DD 的字符串顺序与日期顺序一致。
         if normalized_date_from is not None:
             try:
                 # 把字符串解析为日期对象
-                date.fromisoformat(
-                    normalized_date_from
-                )
+                date.fromisoformat(normalized_date_from)
             except ValueError as error:
-                raise ValueError(
-                    "开始日期必须使用 YYYY-MM-DD"
-                ) from error
+                raise ValueError("开始日期必须使用 YYYY-MM-DD") from error
 
-            conditions.append(
-                "report_date >= ?"
-            )
-            parameters.append(
-                normalized_date_from
-            )
+            conditions.append("report_date >= ?")
+            parameters.append(normalized_date_from)
 
         if normalized_date_to is not None:
             try:
-                date.fromisoformat(
-                    normalized_date_to
-                )
+                date.fromisoformat(normalized_date_to)
             except ValueError as error:
-                raise ValueError(
-                    "结束日期必须使用 YYYY-MM-DD"
-                ) from error
+                raise ValueError("结束日期必须使用 YYYY-MM-DD") from error
 
-            conditions.append(
-                "report_date <= ?"
-            )
-            parameters.append(
-                normalized_date_to
-            )
+            conditions.append("report_date <= ?")
+            parameters.append(normalized_date_to)
 
         if (
             normalized_date_from is not None
             and normalized_date_to is not None
-            and normalized_date_from
-            > normalized_date_to
+            and normalized_date_from > normalized_date_to
         ):
-            raise ValueError(
-                "开始日期不能晚于结束日期"
-            )
+            raise ValueError("开始日期不能晚于结束日期")
 
         sql = "SELECT * FROM documents"
 
         if conditions:
-            sql += (
-                " WHERE "
-                + " AND ".join(conditions)
-            )
+            sql += " WHERE " + " AND ".join(conditions)
 
-        sql += (
-            " ORDER BY "
-            "uploaded_at DESC, "
-            "saved_name ASC"
-        )
+        sql += " ORDER BY uploaded_at DESC, saved_name ASC"
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -441,10 +372,7 @@ class DocumentRegistry:
                 parameters,
             ).fetchall()
 
-        return [
-            DocumentRecord(**dict(row))
-            for row in rows
-        ]
+        return [DocumentRecord(**dict(row)) for row in rows]
 
     def get_project_by_id(
         self,
@@ -464,9 +392,7 @@ class DocumentRegistry:
         if row is None:
             return None
 
-        return ProjectRecord(
-            **dict(row)
-        )
+        return ProjectRecord(**dict(row))
 
     def create_project(
         self,
@@ -480,26 +406,15 @@ class DocumentRegistry:
         cleaned_name = name.strip()
 
         if not cleaned_name:
-            raise ValueError(
-                "项目名称不能为空"
-            )
+            raise ValueError("项目名称不能为空")
 
-        cleaned_description = (
-            self._optional_text(
-                description
-            )
-        )
+        cleaned_description = self._optional_text(description)
 
         # UUID 与名称无关，因此以后修改项目名称时，
         # 文档关联不需要变化。
-        project_id = (
-            f"project_{uuid4().hex[:16]}"
-        )
+        project_id = f"project_{uuid4().hex[:16]}"
 
-        created_at = (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="seconds")
-        )
+        created_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         try:
             with self._connect() as connection:
@@ -521,10 +436,7 @@ class DocumentRegistry:
                 )
 
         except sqlite3.IntegrityError as error:
-            raise ValueError(
-                "项目名称已经存在："
-                f"{cleaned_name}"
-            ) from error
+            raise ValueError(f"项目名称已经存在：{cleaned_name}") from error
 
         return ProjectRecord(
             project_id=project_id,
@@ -546,10 +458,7 @@ class DocumentRegistry:
                 """
             ).fetchall()
 
-        return [
-            ProjectRecord(**dict(row))
-            for row in rows
-        ]
+        return [ProjectRecord(**dict(row)) for row in rows]
 
     def assign_document(
         self,
@@ -577,10 +486,7 @@ class DocumentRegistry:
                 ).fetchone()
 
                 if project is None:
-                    raise KeyError(
-                        "找不到研究项目："
-                        f"{project_id}"
-                    )
+                    raise KeyError(f"找不到研究项目：{project_id}")
 
             cursor = connection.execute(
                 """
@@ -595,10 +501,7 @@ class DocumentRegistry:
             )
 
             if cursor.rowcount != 1:
-                raise KeyError(
-                    "找不到文档："
-                    f"{document_id}"
-                )
+                raise KeyError(f"找不到文档：{document_id}")
 
     def delete_document(
         self,
@@ -612,14 +515,10 @@ class DocumentRegistry:
         Returns:
             删除前的完整文档记录。
         """
-        cleaned_document_id = (
-            document_id.strip()
-        )
+        cleaned_document_id = document_id.strip()
 
         if not cleaned_document_id:
-            raise ValueError(
-                "document_id不能为空"
-            )
+            raise ValueError("document_id不能为空")
 
         with self._connect() as connection:
             # 先读取完整记录，后续删除本地文件时
@@ -634,10 +533,7 @@ class DocumentRegistry:
             ).fetchone()
 
             if row is None:
-                raise KeyError(
-                    "找不到文档："
-                    f"{cleaned_document_id}"
-                )
+                raise KeyError(f"找不到文档：{cleaned_document_id}")
 
             connection.execute(
                 """
@@ -647,16 +543,12 @@ class DocumentRegistry:
                 (cleaned_document_id,),
             )
 
-        deleted_record = (
-            self._row_to_record(row)
-        )
+        deleted_record = self._row_to_record(row)
 
         # 前面已经检查过row不为空，
         # 这个判断主要帮助类型检查器确认返回类型。
         if deleted_record is None:
-            raise RuntimeError(
-                "删除文档后无法恢复原记录"
-            )
+            raise RuntimeError("删除文档后无法恢复原记录")
 
         return deleted_record
 
@@ -679,7 +571,7 @@ class DocumentRegistry:
 
         normalized = self._normalize_metadata(metadata)
         document_id = f"doc_{document_hash[:20]}"
-        uploaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        uploaded_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         with self._connect() as connection:
             connection.execute(
@@ -691,10 +583,18 @@ class DocumentRegistry:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    document_id, document_hash, original_name, saved_name,
-                    normalized.title, normalized.company, normalized.ticker,
-                    normalized.industry, normalized.document_type,
-                    normalized.report_date, uploaded_at, total_pages,
+                    document_id,
+                    document_hash,
+                    original_name,
+                    saved_name,
+                    normalized.title,
+                    normalized.company,
+                    normalized.ticker,
+                    normalized.industry,
+                    normalized.document_type,
+                    normalized.report_date,
+                    uploaded_at,
+                    total_pages,
                     STATUS_SAVED,
                 ),
             )
@@ -738,8 +638,12 @@ class DocumentRegistry:
                 WHERE document_id = ?
                 """,
                 (
-                    total_pages, processed_pages, text_chunk_count,
-                    image_chunk_count, STATUS_INDEXED, document_id,
+                    total_pages,
+                    processed_pages,
+                    text_chunk_count,
+                    image_chunk_count,
+                    STATUS_INDEXED,
+                    document_id,
                 ),
             )
             if cursor.rowcount != 1:
@@ -755,19 +659,13 @@ class DocumentRegistry:
         这个方法不会修改文档状态和文本证据数。
         图表页处理失败时，原有文本RAG仍然可用。
         """
-        cleaned_document_id = (
-            document_id.strip()
-        )
+        cleaned_document_id = document_id.strip()
 
         if not cleaned_document_id:
-            raise ValueError(
-                "document_id不能为空"
-            )
+            raise ValueError("document_id不能为空")
 
         if image_chunk_count < 0:
-            raise ValueError(
-                "图像证据数量不能小于0"
-            )
+            raise ValueError("图像证据数量不能小于0")
 
         with self._connect() as connection:
             cursor = connection.execute(
@@ -783,10 +681,7 @@ class DocumentRegistry:
             )
 
             if cursor.rowcount != 1:
-                raise KeyError(
-                    "找不到文档："
-                    f"{cleaned_document_id}"
-                )
+                raise KeyError(f"找不到文档：{cleaned_document_id}")
 
     def _update_status(
         self,

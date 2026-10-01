@@ -1,14 +1,8 @@
 """封装项目使用的文本 Embedding 模型。"""
 
-import os
-from pathlib import Path
-
-from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_PATH = PROJECT_ROOT / ".env"
+from research_kb.settings import require_environment
 
 EXPECTED_DIMENSION = 1024
 
@@ -18,25 +12,11 @@ class EmbeddingService:
 
     def __init__(self) -> None:
         """读取环境变量并初始化 LangChain Embedding 模型。"""
-        load_dotenv(ENV_PATH)
-
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        model_name = os.getenv("EMBEDDING_MODEL")
-
-        missing_names = [
-            name
-            for name, value in (
-                ("OPENAI_API_KEY", api_key),
-                ("OPENAI_BASE_URL", base_url),
-                ("EMBEDDING_MODEL", model_name),
-            )
-            if not value
-        ]
-
-        if missing_names:
-            missing_text = ", ".join(missing_names)
-            raise ValueError(f"缺少环境变量：{missing_text}")
+        api_key, base_url, model_name = require_environment(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "EMBEDDING_MODEL",
+        )
 
         self.model_name = model_name
         # dimension是预期的向量维度。
@@ -83,7 +63,7 @@ class EmbeddingService:
         vectors: list[list[float]] = []
 
         for start_index in range(0, len(texts), batch_size):
-            batch = texts[start_index:start_index + batch_size]
+            batch = texts[start_index : start_index + batch_size]
             batch_vectors = self._model.embed_documents(batch)
             vectors.extend(batch_vectors)
 
@@ -118,13 +98,10 @@ class EmbeddingService:
     ) -> None:
         """检查模型返回的向量维度。"""
         invalid_dimensions = [
-            len(vector)
-            for vector in vectors
-            if len(vector) != self.dimension
+            len(vector) for vector in vectors if len(vector) != self.dimension
         ]
 
         if invalid_dimensions:
             raise ValueError(
-                f"期望向量维度为 {self.dimension}，"
-                f"但发现异常维度：{invalid_dimensions}"
+                f"期望向量维度为 {self.dimension}，但发现异常维度：{invalid_dimensions}"
             )

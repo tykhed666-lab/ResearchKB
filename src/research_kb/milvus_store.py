@@ -1,15 +1,11 @@
 """管理Milvus连接和Collection结构。"""
 
-import os
-from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
 from pymilvus import DataType, MilvusClient
 
+from research_kb.settings import optional_environment, require_environment
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_PATH = PROJECT_ROOT / ".env"
 VECTOR_DIMENSION = 1024
 
 
@@ -18,16 +14,11 @@ class MilvusStore:
 
     def __init__(self) -> None:
         """读取配置并连接Milvus。"""
-        load_dotenv(ENV_PATH)
-
-        milvus_uri = os.getenv("MILVUS_URI")
-        collection_name = os.getenv(
+        (milvus_uri,) = require_environment("MILVUS_URI")
+        collection_name = optional_environment(
             "MILVUS_COLLECTION",
             "research_knowledge",
         )
-
-        if not milvus_uri:
-            raise ValueError("缺少环境变量：MILVUS_URI")
 
         self.uri = milvus_uri
         self.collection_name = collection_name
@@ -169,10 +160,7 @@ class MilvusStore:
             output_fields=["evidence_id"],
         )
 
-        return {
-            record["evidence_id"]
-            for record in records
-        }
+        return {record["evidence_id"] for record in records}
 
     def get_page_records(
         self,
@@ -197,12 +185,9 @@ class MilvusStore:
             raise ValueError("页码和读取数量必须大于 0")
 
         # Milvus 的 filter 是字符串表达式，文件名中的特殊字符需要转义。
-        safe_source = (
-            self._escape_filter_text(source)
-        )
+        safe_source = self._escape_filter_text(source)
         filter_expression = (
-            f'source == "{safe_source}" '
-            f"and page_number == {page_number}"
+            f'source == "{safe_source}" and page_number == {page_number}'
         )
 
         # vector 用于下一步计算补充片段与问题的真实相似度。
@@ -258,11 +243,7 @@ class MilvusStore:
         如果文件名中包含反斜杠或双引号，
         必须先转义，避免表达式格式被破坏。
         """
-        return (
-            value
-            .replace("\\", "\\\\")
-            .replace('"', '\\"')
-        )
+        return value.replace("\\", "\\\\").replace('"', '\\"')
 
     def get_source_statistics(
         self,
@@ -282,21 +263,15 @@ class MilvusStore:
             max_page：证据覆盖到的最大 PDF 页码。
         """
         if not source.strip():
-            raise ValueError(
-                "source 不能为空"
-            )
+            raise ValueError("source 不能为空")
 
-        safe_source = (
-            self._escape_filter_text(source)
-        )
+        safe_source = self._escape_filter_text(source)
 
         # 这里执行的是普通字段查询，
         # 不会调用 Embedding 模型，也不会产生模型费用。
         records = self.client.query(
             collection_name=self.collection_name,
-            filter=(
-                f'source == "{safe_source}"'
-            ),
+            filter=(f'source == "{safe_source}"'),
             output_fields=[
                 "content_type",
                 "page_number",
@@ -304,21 +279,12 @@ class MilvusStore:
             limit=16384,
         )
 
-        text_count = sum(
-            record["content_type"] == "text"
-            for record in records
-        )
+        text_count = sum(record["content_type"] == "text" for record in records)
 
-        image_count = sum(
-            record["content_type"] == "image"
-            for record in records
-        )
+        image_count = sum(record["content_type"] == "image" for record in records)
 
         max_page = max(
-            (
-                int(record["page_number"])
-                for record in records
-            ),
+            (int(record["page_number"]) for record in records),
             default=0,
         )
 
@@ -350,62 +316,38 @@ class MilvusStore:
         cleaned_source = source.strip()
 
         if not cleaned_source:
-            raise ValueError(
-                "source不能为空"
-            )
+            raise ValueError("source不能为空")
 
         if content_type not in {
             None,
             "text",
             "image",
         }:
-            raise ValueError(
-                "content_type只能是"
-                "text、image或None"
-            )
+            raise ValueError("content_type只能是text、image或None")
 
         # 删除前先统计数量，使页面能够告诉用户
         # 本次实际清理了多少条证据。
-        statistics = (
-            self.get_source_statistics(
-                cleaned_source
-            )
-        )
+        statistics = self.get_source_statistics(cleaned_source)
 
         if content_type is None:
-            deleted_count = (
-                statistics["total"]
-            )
+            deleted_count = statistics["total"]
         else:
-            deleted_count = (
-                statistics[content_type]
-            )
+            deleted_count = statistics[content_type]
 
         if deleted_count == 0:
             return 0
 
-        safe_source = (
-            self._escape_filter_text(
-                cleaned_source
-            )
-        )
+        safe_source = self._escape_filter_text(cleaned_source)
 
-        filter_expression = (
-            f'source == "{safe_source}"'
-        )
+        filter_expression = f'source == "{safe_source}"'
 
         if content_type is not None:
-            filter_expression += (
-                " and content_type == "
-                f'"{content_type}"'
-            )
+            filter_expression += f' and content_type == "{content_type}"'
 
         # delete只处理Milvus中的向量和证据字段，
         # 不会删除SQLite记录或本地PDF。
         self.client.delete(
-            collection_name=(
-                self.collection_name
-            ),
+            collection_name=(self.collection_name),
             filter=filter_expression,
         )
 
@@ -423,9 +365,4 @@ class MilvusStore:
             output_fields=["source"],
         )
 
-        return sorted(
-            {
-                record["source"]
-                for record in records
-            }
-        )
+        return sorted({record["source"] for record in records})

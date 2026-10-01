@@ -1,113 +1,207 @@
 # ResearchKB
 
-个人多模态行研资料库：上传不同行业的 PDF，检索文字与图表证据，生成带原文页码的回答，并根据美股 Ticker 查询和保存 SEC 官方披露。美股 AI 基础设施是目前的演示资料，不限制后续研究行业。
+[![Quality Gate](https://github.com/tykhed666-lab/ResearchKB/actions/workflows/quality.yml/badge.svg)](https://github.com/tykhed666-lab/ResearchKB/actions/workflows/quality.yml)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-项目正在向个人多源行研工作台扩展。当前架构、真实数据状态、关键取舍和第 14 天后续计划统一记录在[项目交接说明](docs/项目交接说明.md)。SEC 官方披露正文、混合检索和 Markdown 研究简报已经接入。
+ResearchKB 是一个面向个人行业研究的多模态知识库。它把 PDF、图表和 SEC EDGAR 官方披露转换为可追踪的证据，在限定资料范围内完成检索问答、拒答判断和研究简报生成，并对模型返回的每个引用 ID 做程序级校验。
 
-## 当前状态
+当前演示主题是美股 AI 基础设施产业链，但数据模型和处理流程不绑定行业。
 
-第十三天研究简报已经完成：用户沿用当前项目和资料范围，输入研究问题与简报日期，系统按来源平衡召回证据，生成包含核心结论、关键事实、公司与行业对比、催化因素、风险、信息缺口和来源清单的 Markdown 文件。所有事实陈述必须通过证据 ID 校验，无引用内容会转为信息缺口。
+## 为什么做这个项目
 
-当前演示库包含 6 份 PDF 的 312 条证据，以及 Target 10-K 的 427 条 SEC 网页证据和 NVIDIA 10-K 的 500 条 SEC 网页证据，总计 1239 条 Milvus 实体。NVIDIA 原文按单份 500 条的成本上限截断，SQLite 会保留证据数量、索引时间和失败信息。
+通用聊天模型可以总结文档，却很难同时解决以下工程问题：
 
-## 启动网页
+- 大型 PDF 的文字、表格和图表如何进入同一个检索空间；
+- 多份报告和 SEC 网页混合检索时，如何保留来源、报告期和页码；
+- 模型证据不足时如何拒答，而不是用常识补齐；
+- 上传、重新入库和删除后，SQLite、Milvus 与本地文件如何保持一致；
+- 研究结论如何保存为可复查、不会覆盖旧版本的交付物。
 
-在 PowerShell 中运行：
+ResearchKB 将这些问题实现为一条完整的数据与应用链路，而不是只演示一次模型调用。
+
+## 核心能力
+
+- **多模态 PDF 入库**：提取文本、切分证据，并为选定图表页生成视觉描述和图像证据。
+- **可控范围检索**：支持按项目、行业、公司、日期和资料多选限制检索范围。
+- **有依据的问答**：只允许引用本轮召回的真实证据 ID；证据不足时明确拒答。
+- **自适应召回**：先执行 Top-K 检索，必要时补齐同页片段；仍不足时扩大一次召回范围。
+- **SEC 官方资料接入**：根据美股 Ticker 查询 10-K/10-Q，下载并清洗官方 HTML 后入库。
+- **研究简报生成**：平衡不同来源的证据，生成带结论、对比、催化因素、风险和信息缺口的 Markdown 简报。
+- **文档生命周期管理**：支持哈希去重、项目归属、重新入库、备份删除和失败状态记录。
+- **工程质量门禁**：Ruff、语法编译、Pytest、覆盖率阈值和 GitHub Actions 使用同一套检查入口。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    A[PDF 上传] --> B[文本提取与切分]
+    A --> C[页面渲染与视觉描述]
+    D[SEC EDGAR] --> E[HTML 清洗与切分]
+    B --> F[Embedding]
+    C --> F
+    E --> F
+    F --> G[(Milvus 向量证据库)]
+    A --> H[(SQLite 元数据与状态)]
+    D --> H
+
+    I[项目与资料筛选] --> J[检索器]
+    G --> J
+    H --> I
+    J --> K[同页补证据 / 扩大召回]
+    K --> L[结构化模型输出]
+    L --> M{引用 ID 校验}
+    M -->|有效| N[问答与研究简报]
+    M -->|无效| O[拒绝输出]
+```
+
+### 关键设计
+
+1. **证据可追踪**：每条证据保存稳定 ID、来源、物理页码、片段序号和内容类型。
+2. **两层去重**：文件 SHA-256 防止重复登记，稳定证据 ID 防止重复向量写入。
+3. **引用白名单**：模型只能返回本轮上下文中的证据 ID；伪造引用会直接触发异常。
+4. **安全拒答**：资料不足的回答不展示无关召回结果作为引用。
+5. **跨来源平衡**：研究简报按来源分配召回配额，避免大型文档独占上下文。
+6. **有限外部访问**：SEC 客户端包含身份声明、速率控制、超时、重试、响应大小和域名限制。
+7. **可恢复删除**：文档删除前生成备份，再同步清理向量、登记、PDF 和页面图片。
+
+## 技术栈
+
+| 层级 | 技术 |
+| --- | --- |
+| Web 应用 | Streamlit |
+| 模型接口 | OpenAI-compatible API、LangChain Core |
+| 文本与视觉模型 | 默认配置为阿里云百炼兼容接口，可替换为其他兼容服务 |
+| 向量数据库 | Milvus |
+| 元数据存储 | SQLite |
+| PDF 处理 | PyMuPDF、pypdf |
+| 数据校验 | Pydantic |
+| 工程工具 | uv、Ruff、Pytest、pytest-cov、GitHub Actions |
+
+## 快速开始
+
+### 1. 前置条件
+
+- Python 3.11；
+- [uv](https://docs.astral.sh/uv/)；
+- 一个可访问的 Milvus 实例；
+- 支持文本、视觉和 Embedding 的 OpenAI-compatible 模型服务；
+- 如需使用 SEC 功能，准备一个包含联系邮箱的 User-Agent。
+
+### 2. 安装项目
 
 ```powershell
-cd E:\AI-Agent-Projects\ResearchKB
-uv run streamlit run app.py
+git clone https://github.com/tykhed666-lab/ResearchKB.git
+cd ResearchKB
+uv sync --locked --all-groups
+Copy-Item .env.example .env
 ```
 
-浏览器打开 `http://localhost:8501`。停止服务时，在运行终端按 `Ctrl + C`。
-
-在 PyCharm 中也可以运行：
-
-```text
-scripts/run_streamlit.py
-```
-
-不要把 `app.py` 直接当作普通 Python 文件运行，否则 Streamlit 没有 `ScriptRunContext`。
-
-## 页面能力
-
-- 查看 Milvus 当前有效实体数和已入库 PDF。
-- 在全部资料或单份 PDF 范围内提问。
-- 展示回答、证据不足状态、引用页码和证据原文。
-- 区分文本证据与图表证据，并展开显示 PDF 页面原图和视觉描述。
-- 保存当前会话的聊天记录并支持一键清空。
-- 上传不超过 20 MB 的 PDF，并限制单次最多处理 30 页。
-- 上传时登记标题、公司、Ticker、行业、文档类型和报告日期。
-- 展示文档处理状态、文本证据数、图像证据数和失败原因。
-- 通过文件哈希和证据 ID 两层去重，避免重复 Embedding 和重复入库。
-- 新建研究项目，并调整已有文档或新上传文档的项目归属。
-- 按项目、行业、公司和报告日期组合筛选问答资料。
-- 在筛选结果中选择多份 PDF，执行带来源隔离的检索问答。
-- 重新生成指定文档的文本证据，同时保留已有图像证据。
-- 确认并备份后，同步删除向量、登记记录、PDF 和页面图片。
-- 为已上传 PDF 选择最多 5 个图表页，生成视觉描述和图像证据。
-- 重复处理已有图表页时跳过视觉模型和 Embedding 调用。
-- 根据美股 Ticker 查询 SEC 最近的 10-K 和 10-Q。
-- 展示 SEC 公司名称、CIK、报告期、提交日期、accession number 和官方原文。
-- 将 SEC 披露保存到当前研究项目，并识别重复记录。
-- 下载 SEC 主 HTML，排除脚本、样式和隐藏 XBRL 后切分入库。
-- 在“仅资料库”和“综合研究”之间切换，综合模式检索 PDF 与已索引 SEC 正文。
-- PDF 引用显示物理页码；SEC 引用显示报告期和官方 URL，不虚构页码。
-- 按当前项目和资料范围生成固定结构的 Markdown 研究简报。
-- 公司对比按来源平衡召回，防止单个大型 SEC 文档挤占全部结果。
-- 简报逐条校验引用 ID，自动保存到 `data/reports` 并支持页面下载。
-- 文件名包含微秒时间戳，不覆盖旧简报；无证据内容明确进入信息缺口。
-- SEC 请求声明 User-Agent、限制请求频率，并处理超时、429 和服务端错误。
-
-## 环境检查
-
-在 PowerShell 中运行：
-
-```powershell
-cd E:\AI-Agent-Projects\ResearchKB
-uv run python scripts\check_day1.py
-```
-
-填入 `.env` 的 API Key 后，再运行：
-
-```powershell
-uv run python scripts\check_cloud_models.py
-```
-
-如果虚拟机 IP 改变，将 `.env.example` 复制为 `.env`，只修改 `MILVUS_URI`。真实 API Key 只放在 `.env`，不要提交到 Git。
-
-SEC EDGAR 不需要 API Key，但自动访问必须在 `.env` 中声明应用名称和联系邮箱：
+编辑 `.env`：
 
 ```dotenv
+MILVUS_URI=http://your-milvus-host:19530
+MILVUS_COLLECTION=research_knowledge
+
+OPENAI_API_KEY=your-api-key
+OPENAI_BASE_URL=https://your-provider.example.com/v1
+TEXT_MODEL=your-text-model
+VISION_MODEL=your-vision-model
+EMBEDDING_MODEL=your-embedding-model
+
 SEC_USER_AGENT=ResearchKB your-email@example.com
 ```
 
-## 目录
+真实密钥只应保存在本机 `.env`，不要提交到 Git。
 
-- `data/raw`：原始 PDF。
-- `data/research_kb.db`：本机 SQLite 文档登记簿，不提交 Git。
-- `data/external`：下载的 SEC HTML 原文，不提交 Git。
-- `data/reports`：页面生成的 Markdown 研究简报，不提交 Git。
-- `data/qa`：PDF 视觉检查图片，不提交 Git。
-- `docs/项目交接说明.md`：唯一的项目历史、架构、数据状态、开发约束和后续计划。
-- `AGENTS.md`：提示 Codex 在修改项目前先阅读交接说明。
-- `scripts/check_day1.py`：第一天环境检查。
-- `scripts/run_streamlit.py`：供 PyCharm 普通运行按钮使用的 Streamlit 启动入口。
-- `scripts/render_chart_pages.py`：渲染首轮三张 PDF 图表页。
-- `scripts/describe_chart_pages.py`：调用视觉模型生成可检索的图表描述。
-- `scripts/index_visual_evidence.py`：将图像描述转成向量并写入 Milvus。
-- `scripts/migrate_document_registry.py`：把已有 PDF 和 Milvus 证据补登记到 SQLite。
-- `scripts/check_upload.py`：验证真实 PDF 重复上传不会增加文档或向量。
-- `tests/test_document_registry.py`：文档登记与上传状态的离线自动化测试。
-- `tests/test_document_management.py`：项目隔离、组合筛选、备份删除与重新入库测试。
-- `tests/test_visual_ingestion.py`：图表页解析、视觉入库、重复跳过和越界拒绝测试。
-- `tests/test_sec_edgar.py`：SEC JSON 解析、URL、缓存、超时和限流测试。
-- `tests/test_external_source_registry.py`：外部披露保存、去重、项目外键和筛选测试。
-- `src/research_kb/sec_edgar.py`：SEC 数据模型、纯函数和官方 API 客户端。
-- `src/research_kb/external_source_registry.py`：外部研究资料 SQLite 登记簿。
-- `src/research_kb/sec_html.py`：提取 SEC HTML 可见正文并切分证据。
-- `src/research_kb/external_ingestion.py`：SEC 下载、清洗、向量化和状态更新流程。
-- `src/research_kb/research_report.py`：平衡检索、简报结构、引用校验和 Markdown 保存。
-- `src/research_kb`：后续业务代码。
+### 3. 初始化并启动
 
-原始 PDF、SQLite、页面图片和真实 `.env` 只保存在本机，不上传 GitHub。向另一台电脑交接可运行数据时，请按照交接说明的文件清单单独复制。
+```powershell
+uv run python scripts/setup_milvus.py
+uv run streamlit run app.py
+```
+
+浏览器访问 `http://localhost:8501`。在 PyCharm 中也可以直接运行 `scripts/run_streamlit.py`；不要把 `app.py` 当普通 Python 脚本启动。
+
+首次使用时，在页面中创建研究项目并上传 PDF。原始 PDF、向量数据、SQLite、SEC 原文、页面图片和生成简报均属于本地运行数据，不包含在仓库中。
+
+## 页面工作流
+
+1. **研究范围**：创建项目，按行业、公司和日期筛选资料。
+2. **上传 PDF**：填写文档元数据，完成文本证据入库并查看处理状态。
+3. **图表增强**：选择关键图表页，生成可检索的视觉描述。
+4. **SEC 披露**：输入 Ticker，查询、保存并索引官方 10-K/10-Q。
+5. **检索问答**：在所选资料范围内提问，检查回答、拒答状态和原始证据。
+6. **研究简报**：生成带完整引用清单的 Markdown 文件并下载。
+
+## 质量与验收
+
+本地和 CI 使用同一个质量门禁：
+
+```powershell
+uv run python scripts/check_quality.py
+```
+
+该命令依次执行格式检查、静态检查、Python 语法编译和完整自动化测试；核心包行覆盖率低于 70% 时失败。
+
+2026-10-01 在真实本地数据与服务上的收工验收结果：
+
+| 验收项 | 结果 |
+| --- | --- |
+| 自动化测试 | 38 项通过，覆盖率 72%+ |
+| Python / PDF / Milvus 环境 | 6 份 PDF、571 页、目标 Collection 可用 |
+| 文本、视觉、Embedding 模型 | 全部调用成功，Embedding 维度 1024 |
+| 普通检索 | 5/5 来源命中，单文档过滤通过 |
+| 多模态检索 | 3/3 图像证据命中 |
+| 多模态问答 | 3/3 正确引用预期图像证据 |
+| 综合问答 | 库内问题 5/5，库外拒答 3/3 |
+| 重复上传 | 新增文档 0、新增向量 0，前后数量一致 |
+| SEC 实时查询 | 成功返回 NVIDIA 最近 3 份 10-K/10-Q |
+| 研究简报 | 生成成功，8 条召回证据对应 8 条有效引用 |
+| Streamlit | 服务启动成功，首页 HTTP 200 |
+
+涉及真实模型、Milvus 或 SEC 网络的验收脚本不会放入 CI，以避免消耗密钥和依赖私有运行数据，可按需执行：
+
+```powershell
+uv run python scripts/check_day1.py
+uv run python scripts/check_cloud_models.py
+uv run python scripts/check_retrieval.py
+uv run python scripts/check_multimodal_retrieval.py
+uv run python scripts/check_multimodal_qa.py
+uv run python scripts/evaluate_qa.py
+uv run python scripts/check_upload.py
+```
+
+## 项目结构
+
+```text
+ResearchKB/
+├─ app.py                         # Streamlit 页面与交互入口
+├─ src/research_kb/
+│  ├─ settings.py                # 路径、环境变量和业务默认值
+│  ├─ upload_service.py          # PDF 上传、去重和入库编排
+│  ├─ retrieval.py               # Milvus 检索与同页证据扩展
+│  ├─ qa.py                      # 结构化问答、拒答和引用校验
+│  ├─ visual_ingestion.py        # 图表页视觉证据流水线
+│  ├─ sec_edgar.py               # SEC 官方接口客户端
+│  ├─ external_ingestion.py      # SEC HTML 清洗与入库
+│  └─ research_report.py         # 多来源研究简报生成
+├─ tests/                         # 离线自动化测试
+├─ scripts/                       # 初始化、启动与真实链路验收脚本
+└─ .github/workflows/quality.yml  # GitHub Actions 质量门禁
+```
+
+## 当前边界
+
+- Milvus 需要单独部署，仓库暂未提供一键容器编排。
+- 图表页由用户选择后处理，尚未自动识别整份 PDF 中的高价值图表。
+- 综合评测是固定的小规模验收集，不代表通用行业问答准确率。
+- 项目是个人研究辅助工具，生成内容仍需结合原始证据人工复核，不构成投资建议。
+
+## 安全与数据
+
+以下内容已被 `.gitignore` 排除：`.env`、原始 PDF、SQLite 数据库、SEC 下载原文、页面图片、评测记录、备份和生成简报。若发现凭证曾进入 Git 历史，应立即吊销并更换，而不只是删除本地文件。
+
+## License
+
+本项目采用 [MIT License](LICENSE)。

@@ -1,19 +1,17 @@
 [project]
 name = "research-kb"
-version = "0.1.0"
+version = "1.0.0"
 description = "A personal multimodal research knowledge base for cross-industry documents."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "httpx>=0.28",
-    "langchain>=1.4",
-    "langchain-mcp-adapters>=0.2",
-    "langchain-milvus>=0.3",
-    "langchain-ollama>=1.0",
+    "langchain-core>=1.2",
     "langchain-openai>=1.6",
     "langchain-text-splitters>=1.1.2",
-    "langgraph>=1.2",
-    "mcp>=1.26",
+    "openai>=2.0",
+    "pydantic>=2.12",
+    "pymilvus>=2.6",
     "pymupdf>=1.26",
     "pypdf>=6.0",
     "python-dotenv>=1.1",
@@ -30,7 +28,28 @@ packages = ["src/research_kb"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.14",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+addopts = [
+    "--cov=research_kb",
+    "--cov-report=term-missing",
+    "--cov-fail-under=70",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "BLE", "SIM", "DTZ"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 页面和多页处理器是异常展示边界：它们需要捕获未知外部服务错误，
+# 转换为用户可读提示；其他业务模块仍禁止无差别吞掉 Exception。
+"app.py" = ["BLE001"]
+"src/research_kb/visual_ingestion.py" = ["BLE001"]

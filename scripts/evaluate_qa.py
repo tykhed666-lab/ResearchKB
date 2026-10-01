@@ -4,19 +4,17 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from console_output import configure_utf8_stdout
+
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.qa import RAGQuestionAnswerer
 from research_kb.retrieval import MilvusRetriever
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "qa_evaluation.json"
-)
+OUTPUT_PATH = PROJECT_ROOT / "data" / "processed" / "qa_evaluation.json"
+
+configure_utf8_stdout()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,10 +78,7 @@ def evaluate_result(
     库外问题必须明确标记信息不足。
     """
     if case.should_answer:
-        return (
-            not insufficient_information
-            and case.expected_source in citation_sources
-        )
+        return not insufficient_information and case.expected_source in citation_sources
 
     return insufficient_information
 
@@ -116,16 +111,11 @@ def main() -> None:
 
         result = answerer.answer(case.question)
 
-        citation_sources = {
-            citation.source
-            for citation in result.citations
-        }
+        citation_sources = {citation.source for citation in result.citations}
 
         passed = evaluate_result(
             case=case,
-            insufficient_information=(
-                result.insufficient_information
-            ),
+            insufficient_information=(result.insufficient_information),
             citation_sources=citation_sources,
         )
 
@@ -155,22 +145,15 @@ def main() -> None:
                 "expected_source": case.expected_source,
                 "passed": passed,
                 "answer": result.answer,
-                "insufficient_information": (
-                    result.insufficient_information
-                ),
-                "missing_information": (
-                    result.missing_information
-                ),
+                "insufficient_information": (result.insufficient_information),
+                "missing_information": (result.missing_information),
                 "retrieved_count": result.retrieved_count,
                 "citations": citation_records,
             }
         )
 
         print(f"应当回答：{case.should_answer}")
-        print(
-            f"信息是否不足："
-            f"{result.insufficient_information}"
-        )
+        print(f"信息是否不足：{result.insufficient_information}")
         print(f"本题是否通过：{passed}")
         print(f"回答：{result.answer}")
 
@@ -180,10 +163,7 @@ def main() -> None:
             print("- 无")
         else:
             for citation in result.citations:
-                print(
-                    f"- [{citation.evidence_id}] "
-                    f"{citation.citation}"
-                )
+                print(f"- [{citation.evidence_id}] {citation.citation}")
 
     OUTPUT_PATH.parent.mkdir(
         parents=True,
@@ -213,14 +193,8 @@ def main() -> None:
     )
 
     print("\n最终验收：")
-    print(
-        f"库内问题："
-        f"{answerable_passed}/{answerable_total}"
-    )
-    print(
-        f"库外拒答："
-        f"{unanswerable_passed}/{unanswerable_total}"
-    )
+    print(f"库内问题：{answerable_passed}/{answerable_total}")
+    print(f"库外拒答：{unanswerable_passed}/{unanswerable_total}")
     print(f"记录文件：{OUTPUT_PATH}")
 
 

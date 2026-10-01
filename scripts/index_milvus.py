@@ -8,32 +8,19 @@ from research_kb.embedding_service import EmbeddingService
 from research_kb.indexer import EvidenceIndexer
 from research_kb.milvus_store import MilvusStore
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_PATH = (
-    PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "first_pass_evidence.json"
-)
+EVIDENCE_PATH = PROJECT_ROOT / "data" / "processed" / "first_pass_evidence.json"
 
 
 def load_evidence_chunks() -> list[EvidenceChunk]:
     """从JSON读取并恢复EvidenceChunk对象。"""
     if not EVIDENCE_PATH.is_file():
-        raise FileNotFoundError(
-            f"找不到证据JSON：{EVIDENCE_PATH}"
-        )
+        raise FileNotFoundError(f"找不到证据JSON：{EVIDENCE_PATH}")
 
     # 把json转换为字典列表
-    evidence_data = json.loads(
-        EVIDENCE_PATH.read_text(encoding="utf-8")
-    )
+    evidence_data = json.loads(EVIDENCE_PATH.read_text(encoding="utf-8"))
     # 把字典列表转换为EvidenceChunk对象列表
-    return [
-        EvidenceChunk(**item)
-        for item in evidence_data
-    ]
+    return [EvidenceChunk(**item) for item in evidence_data]
 
 
 def main() -> None:

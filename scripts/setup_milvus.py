@@ -11,10 +11,7 @@ def main() -> None:
     store.load_collection()
 
     description = store.describe_collection()
-    field_names = [
-        field["name"]
-        for field in description["fields"]
-    ]
+    field_names = [field["name"] for field in description["fields"]]
 
     print(f"Milvus地址：{store.uri}")
     print(f"Collection：{store.collection_name}")

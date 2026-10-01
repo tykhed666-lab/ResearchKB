@@ -1,9 +1,10 @@
 """使用5个已知来源的问题验收Milvus检索。"""
 
+from console_output import configure_utf8_stdout
+
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
 from research_kb.retrieval import MilvusRetriever
-
 
 TEST_CASES = (
     (
@@ -28,6 +29,8 @@ TEST_CASES = (
     ),
 )
 
+configure_utf8_stdout()
+
 
 def main() -> None:
     """执行5个Top-5检索测试和一次文件过滤测试。"""
@@ -47,10 +50,7 @@ def main() -> None:
             top_k=5,
         )
 
-        retrieved_sources = {
-            result.source
-            for result in results
-        }
+        retrieved_sources = {result.source for result in results}
 
         passed = expected_source in retrieved_sources
 
@@ -64,10 +64,7 @@ def main() -> None:
         for rank, result in enumerate(results, start=1):
             preview = " ".join(result.text.split())[:160]
 
-            print(
-                f"  {rank}. 分数={result.score:.4f} | "
-                f"{result.citation}"
-            )
+            print(f"  {rank}. 分数={result.score:.4f} | {result.citation}")
             print(f"     {preview}")
 
     print("\n检索验收：")
@@ -82,12 +79,8 @@ def main() -> None:
         source=filter_source,
     )
 
-    filter_passed = (
-        len(filtered_results) == 3
-        and all(
-            result.source == filter_source
-            for result in filtered_results
-        )
+    filter_passed = len(filtered_results) == 3 and all(
+        result.source == filter_source for result in filtered_results
     )
 
     print(f"单文件过滤：{filter_passed}")

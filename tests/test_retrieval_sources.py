@@ -37,6 +37,4 @@ def test_sec_result_skips_pdf_page_expansion() -> None:
     )
 
     assert expanded == [result]
-    assert result.citation == (
-        "TGT 10-K (2026-01-31)，SEC 官方原文"
-    )
+    assert result.citation == ("TGT 10-K (2026-01-31)，SEC 官方原文")

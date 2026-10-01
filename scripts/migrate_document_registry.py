@@ -15,14 +15,9 @@ from research_kb.milvus_store import (
     MilvusStore,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-PROJECT_ROOT = (
-    Path(__file__).resolve().parents[1]
-)
-
-RAW_DATA_DIR = (
-    PROJECT_ROOT / "data" / "raw"
-)
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
 
 
 # 历史资料没有经过上传页面，
@@ -33,9 +28,7 @@ RAW_DATA_DIR = (
 KNOWN_METADATA = {
     "01_NVDA_2026_Annual_Report.pdf": (
         DocumentMetadata(
-            title=(
-                "NVIDIA 2026 Annual Report"
-            ),
+            title=("NVIDIA 2026 Annual Report"),
             document_type="年报",
             company="NVIDIA",
             ticker="NVDA",
@@ -45,9 +38,7 @@ KNOWN_METADATA = {
     ),
     "02_AMD_2025_Annual_Report.pdf": (
         DocumentMetadata(
-            title=(
-                "AMD 2025 Annual Report"
-            ),
+            title=("AMD 2025 Annual Report"),
             document_type="年报",
             company="AMD",
             ticker="AMD",
@@ -55,15 +46,9 @@ KNOWN_METADATA = {
             report_date=None,
         )
     ),
-    (
-        "03_LITE_OFC_2026_"
-        "Investor_Briefing.pdf"
-    ): (
+    ("03_LITE_OFC_2026_Investor_Briefing.pdf"): (
         DocumentMetadata(
-            title=(
-                "Lumentum OFC 2026 "
-                "Investor Briefing"
-            ),
+            title=("Lumentum OFC 2026 Investor Briefing"),
             document_type="投资者演示",
             company="Lumentum",
             ticker="LITE",
@@ -73,9 +58,7 @@ KNOWN_METADATA = {
     ),
     "04_MU_2025_Annual_Report.pdf": (
         DocumentMetadata(
-            title=(
-                "Micron 2025 Annual Report"
-            ),
+            title=("Micron 2025 Annual Report"),
             document_type="年报",
             company="Micron",
             ticker="MU",
@@ -83,10 +66,7 @@ KNOWN_METADATA = {
             report_date=None,
         )
     ),
-    (
-        "05_STX_2025_"
-        "Decarbonizing_Data_Report.pdf"
-    ): (
+    ("05_STX_2025_Decarbonizing_Data_Report.pdf"): (
         DocumentMetadata(
             title="Decarbonizing Data",
             document_type="行业报告",
@@ -98,9 +78,7 @@ KNOWN_METADATA = {
     ),
     "06_TGT_2025_Annual_Report.pdf": (
         DocumentMetadata(
-            title=(
-                "Target 2025 Annual Report"
-            ),
+            title=("Target 2025 Annual Report"),
             document_type="年报",
             company="Target",
             ticker="TGT",
@@ -117,9 +95,7 @@ def read_total_pages(
     """读取 PDF 总页数，并确保文件可正常打开。"""
     with pymupdf.open(pdf_path) as document:
         if document.needs_pass:
-            raise ValueError(
-                f"PDF 需要密码：{pdf_path.name}"
-            )
+            raise ValueError(f"PDF 需要密码：{pdf_path.name}")
 
         return document.page_count
 
@@ -136,42 +112,23 @@ def main() -> None:
     skipped_count = 0
     failed_count = 0
 
-    pdf_paths = sorted(
-        RAW_DATA_DIR.glob("*.pdf")
-    )
+    pdf_paths = sorted(RAW_DATA_DIR.glob("*.pdf"))
 
-    print(
-        f"发现本地 PDF：{len(pdf_paths)}"
-    )
+    print(f"发现本地 PDF：{len(pdf_paths)}")
 
     for pdf_path in pdf_paths:
-        document_hash = (
-            calculate_document_hash(
-                pdf_path
-            )
-        )
+        document_hash = calculate_document_hash(pdf_path)
 
-        existing = registry.get_by_hash(
-            document_hash
-        )
+        existing = registry.get_by_hash(document_hash)
 
         if existing is not None:
-            print(
-                f"跳过：{pdf_path.name} "
-                f"| 状态={existing.status}"
-            )
+            print(f"跳过：{pdf_path.name} | 状态={existing.status}")
             skipped_count += 1
             continue
 
-        total_pages = read_total_pages(
-            pdf_path
-        )
+        total_pages = read_total_pages(pdf_path)
 
-        statistics = (
-            store.get_source_statistics(
-                pdf_path.name
-            )
-        )
+        statistics = store.get_source_statistics(pdf_path.name)
 
         metadata = KNOWN_METADATA.get(
             pdf_path.name,
@@ -181,69 +138,38 @@ def main() -> None:
             ),
         )
 
-        record, _ = (
-            registry.register_document(
-                document_hash=document_hash,
-                original_name=pdf_path.name,
-                saved_name=pdf_path.name,
-                metadata=metadata,
-                total_pages=total_pages,
-            )
+        record, _ = registry.register_document(
+            document_hash=document_hash,
+            original_name=pdf_path.name,
+            saved_name=pdf_path.name,
+            metadata=metadata,
+            total_pages=total_pages,
         )
 
         if statistics["total"] > 0:
             registry.mark_indexed(
-                document_id=(
-                    record.document_id
-                ),
+                document_id=(record.document_id),
                 total_pages=total_pages,
-                processed_pages=(
-                    statistics["max_page"]
-                ),
-                text_chunk_count=(
-                    statistics["text"]
-                ),
-                image_chunk_count=(
-                    statistics["image"]
-                ),
+                processed_pages=(statistics["max_page"]),
+                text_chunk_count=(statistics["text"]),
+                image_chunk_count=(statistics["image"]),
             )
 
-            print(
-                f"新增：{pdf_path.name}"
-            )
-            print(
-                f"  总页数：{total_pages}"
-            )
-            print(
-                "  已处理到："
-                f"{statistics['max_page']}页"
-            )
-            print(
-                "  文本证据："
-                f"{statistics['text']}"
-            )
-            print(
-                "  图像证据："
-                f"{statistics['image']}"
-            )
+            print(f"新增：{pdf_path.name}")
+            print(f"  总页数：{total_pages}")
+            print(f"  已处理到：{statistics['max_page']}页")
+            print(f"  文本证据：{statistics['text']}")
+            print(f"  图像证据：{statistics['image']}")
 
             added_count += 1
 
         else:
             registry.mark_failed(
-                document_id=(
-                    record.document_id
-                ),
-                error_message=(
-                    "Milvus 中没有找到"
-                    "该文件的证据"
-                ),
+                document_id=(record.document_id),
+                error_message=("Milvus 中没有找到该文件的证据"),
             )
 
-            print(
-                f"失败：{pdf_path.name}"
-                "，Milvus 中没有证据"
-            )
+            print(f"失败：{pdf_path.name}，Milvus 中没有证据")
 
             failed_count += 1
 
@@ -254,13 +180,8 @@ def main() -> None:
     print(f"新增文档：{added_count}")
     print(f"跳过文档：{skipped_count}")
     print(f"失败文档：{failed_count}")
-    print(
-        f"注册表文档数：{len(documents)}"
-    )
-    print(
-        "Milvus实体数："
-        f"{store.get_entity_count()}"
-    )
+    print(f"注册表文档数：{len(documents)}")
+    print(f"Milvus实体数：{store.get_entity_count()}")
 
     print()
     print("SQLite 文档目录：")

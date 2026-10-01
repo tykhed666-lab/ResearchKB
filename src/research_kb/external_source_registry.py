@@ -1,11 +1,11 @@
 """使用 SQLite 登记用户保存的外部研究资料。"""
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-import sqlite3
 from typing import Final
 
 from research_kb.document_registry import (
@@ -18,19 +18,16 @@ from research_kb.settings import (
     DOCUMENT_DATABASE_PATH,
 )
 
-
 EXTERNAL_STATUS_SAVED: Final = "saved"
 EXTERNAL_STATUS_INDEXED: Final = "indexed"
 EXTERNAL_STATUS_FAILED: Final = "failed"
 
-VALID_EXTERNAL_STATUSES: Final = (
-    frozenset(
-        {
-            EXTERNAL_STATUS_SAVED,
-            EXTERNAL_STATUS_INDEXED,
-            EXTERNAL_STATUS_FAILED,
-        }
-    )
+VALID_EXTERNAL_STATUSES: Final = frozenset(
+    {
+        EXTERNAL_STATUS_SAVED,
+        EXTERNAL_STATUS_INDEXED,
+        EXTERNAL_STATUS_FAILED,
+    }
 )
 
 
@@ -129,15 +126,10 @@ class ExternalSourceRegistry:
 
     def __init__(
         self,
-        database_path: (
-            str
-            | Path
-        ) = DOCUMENT_DATABASE_PATH,
+        database_path: (str | Path) = DOCUMENT_DATABASE_PATH,
     ) -> None:
         """保存数据库地址并初始化数据表。"""
-        self.database_path = Path(
-            database_path
-        )
+        self.database_path = Path(database_path)
 
         self.database_path.parent.mkdir(
             parents=True,
@@ -149,22 +141,16 @@ class ExternalSourceRegistry:
     @contextmanager
     def _connect(
         self,
-    ) -> Iterator[
-        sqlite3.Connection
-    ]:
+    ) -> Iterator[sqlite3.Connection]:
         """创建带事务管理的 SQLite 连接。"""
         connection = sqlite3.connect(
             self.database_path,
             timeout=10,
         )
 
-        connection.row_factory = (
-            sqlite3.Row
-        )
+        connection.row_factory = sqlite3.Row
 
-        connection.execute(
-            "PRAGMA foreign_keys = ON"
-        )
+        connection.execute("PRAGMA foreign_keys = ON")
 
         try:
             yield connection
@@ -187,13 +173,9 @@ class ExternalSourceRegistry:
         因此先确保 projects 表存在。
         """
         with self._connect() as connection:
-            connection.executescript(
-                CREATE_PROJECTS_SQL
-            )
+            connection.executescript(CREATE_PROJECTS_SQL)
 
-            connection.executescript(
-                CREATE_EXTERNAL_SOURCES_SQL
-            )
+            connection.executescript(CREATE_EXTERNAL_SOURCES_SQL)
 
             # 旧数据库通过幂等迁移补齐第 12 天字段。
             existing_columns = {
@@ -204,9 +186,7 @@ class ExternalSourceRegistry:
             }
             migrations = {
                 "local_path": "TEXT",
-                "evidence_count": (
-                    "INTEGER NOT NULL DEFAULT 0"
-                ),
+                "evidence_count": ("INTEGER NOT NULL DEFAULT 0"),
                 "indexed_at": "TEXT",
                 "error_message": "TEXT",
             }
@@ -225,9 +205,7 @@ class ExternalSourceRegistry:
         if row is None:
             return None
 
-        return ExternalSourceRecord(
-            **dict(row)
-        )
+        return ExternalSourceRecord(**dict(row))
 
     @staticmethod
     def _validate_iso_date(
@@ -238,15 +216,10 @@ class ExternalSourceRegistry:
         cleaned = value.strip()
 
         try:
-            date.fromisoformat(
-                cleaned
-            )
+            date.fromisoformat(cleaned)
 
         except ValueError as error:
-            raise ValueError(
-                f"{field_name}必须使用"
-                " YYYY-MM-DD"
-            ) from error
+            raise ValueError(f"{field_name}必须使用 YYYY-MM-DD") from error
 
         return cleaned
 
@@ -255,14 +228,10 @@ class ExternalSourceRegistry:
         source_id: str,
     ) -> ExternalSourceRecord | None:
         """根据来源 ID 查询外部资料。"""
-        cleaned_source_id = (
-            source_id.strip()
-        )
+        cleaned_source_id = source_id.strip()
 
         if not cleaned_source_id:
-            raise ValueError(
-                "source_id不能为空"
-            )
+            raise ValueError("source_id不能为空")
 
         with self._connect() as connection:
             row = connection.execute(
@@ -281,14 +250,10 @@ class ExternalSourceRegistry:
         accession_number: str,
     ) -> ExternalSourceRecord | None:
         """根据 SEC accession number 查询资料。"""
-        cleaned_accession = (
-            accession_number.strip()
-        )
+        cleaned_accession = accession_number.strip()
 
         if not cleaned_accession:
-            raise ValueError(
-                "accession_number不能为空"
-            )
+            raise ValueError("accession_number不能为空")
 
         with self._connect() as connection:
             row = connection.execute(
@@ -318,9 +283,7 @@ class ExternalSourceRegistry:
             project_id:
                 可选的研究项目 ID。
         """
-        existing = self.get_by_id(
-            filing.source_id
-        )
+        existing = self.get_by_id(filing.source_id)
 
         if existing is not None:
             return ExternalSaveResult(
@@ -328,11 +291,7 @@ class ExternalSourceRegistry:
                 created=False,
             )
 
-        existing_accession = (
-            self.get_by_accession_number(
-                filing.accession_number
-            )
-        )
+        existing_accession = self.get_by_accession_number(filing.accession_number)
 
         if existing_accession is not None:
             return ExternalSaveResult(
@@ -340,66 +299,39 @@ class ExternalSourceRegistry:
                 created=False,
             )
 
-        filing_date = (
-            self._validate_iso_date(
-                filing.filing_date,
-                "提交日期",
-            )
+        filing_date = self._validate_iso_date(
+            filing.filing_date,
+            "提交日期",
         )
 
         report_date: str | None = None
 
         if filing.report_date:
-            report_date = (
-                self._validate_iso_date(
-                    filing.report_date,
-                    "报告日期",
-                )
+            report_date = self._validate_iso_date(
+                filing.report_date,
+                "报告日期",
             )
 
-        cleaned_project_id = (
-            project_id.strip()
-            if project_id
-            else None
-        )
+        cleaned_project_id = project_id.strip() if project_id else None
 
-        collected_at = (
-            datetime.now(timezone.utc)
-            .isoformat(
-                timespec="seconds"
-            )
-        )
+        collected_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         record = ExternalSourceRecord(
             source_id=filing.source_id,
             provider="sec_edgar",
-            ticker=(
-                filing.company.ticker
-            ),
+            ticker=(filing.company.ticker),
             cik=filing.company.cik,
-            company_name=(
-                filing.company.name
-            ),
+            company_name=(filing.company.name),
             form_type=filing.form_type,
             report_date=report_date,
             filing_date=filing_date,
-            accession_number=(
-                filing.accession_number
-            ),
-            primary_document=(
-                filing.primary_document
-            ),
-            document_url=(
-                filing.document_url
-            ),
+            accession_number=(filing.accession_number),
+            primary_document=(filing.primary_document),
+            document_url=(filing.document_url),
             index_url=filing.index_url,
             collected_at=collected_at,
-            status=(
-                EXTERNAL_STATUS_SAVED
-            ),
-            project_id=(
-                cleaned_project_id
-            ),
+            status=(EXTERNAL_STATUS_SAVED),
+            project_id=(cleaned_project_id),
             local_path=None,
             evidence_count=0,
             indexed_at=None,
@@ -408,28 +340,18 @@ class ExternalSourceRegistry:
 
         try:
             with self._connect() as connection:
-                if (
-                    cleaned_project_id
-                    is not None
-                ):
-                    project = (
-                        connection.execute(
-                            """
+                if cleaned_project_id is not None:
+                    project = connection.execute(
+                        """
                             SELECT project_id
                             FROM projects
                             WHERE project_id = ?
                             """,
-                            (
-                                cleaned_project_id,
-                            ),
-                        ).fetchone()
-                    )
+                        (cleaned_project_id,),
+                    ).fetchone()
 
                     if project is None:
-                        raise KeyError(
-                            "找不到研究项目："
-                            f"{cleaned_project_id}"
-                        )
+                        raise KeyError(f"找不到研究项目：{cleaned_project_id}")
 
                 connection.execute(
                     """
@@ -477,11 +399,7 @@ class ExternalSourceRegistry:
         except sqlite3.IntegrityError:
             # 极少数情况下，另一个请求可能在
             # 前面的查询和INSERT之间保存了同一记录。
-            duplicate = (
-                self.get_by_accession_number(
-                    filing.accession_number
-                )
-            )
+            duplicate = self.get_by_accession_number(filing.accession_number)
 
             if duplicate is None:
                 raise
@@ -504,14 +422,10 @@ class ExternalSourceRegistry:
     ) -> ExternalSourceRecord:
         """记录外部正文已经下载并完成向量入库。"""
         if evidence_count <= 0:
-            raise ValueError(
-                "evidence_count 必须大于 0"
-            )
+            raise ValueError("evidence_count 必须大于 0")
 
         path = Path(local_path).resolve()
-        indexed_at = datetime.now(
-            timezone.utc
-        ).isoformat(timespec="seconds")
+        indexed_at = datetime.now(UTC).isoformat(timespec="seconds")
 
         with self._connect() as connection:
             cursor = connection.execute(
@@ -531,9 +445,7 @@ class ExternalSourceRegistry:
                 ),
             )
             if cursor.rowcount == 0:
-                raise KeyError(
-                    f"找不到外部资料：{source_id}"
-                )
+                raise KeyError(f"找不到外部资料：{source_id}")
 
         record = self.get_by_id(source_id)
         if record is None:
@@ -571,9 +483,7 @@ class ExternalSourceRegistry:
                 ),
             )
             if cursor.rowcount == 0:
-                raise KeyError(
-                    f"找不到外部资料：{source_id}"
-                )
+                raise KeyError(f"找不到外部资料：{source_id}")
 
         record = self.get_by_id(source_id)
         if record is None:
@@ -585,86 +495,44 @@ class ExternalSourceRegistry:
         ticker: str | None = None,
         status: str | None = None,
         project_id: str | None = None,
-    ) -> list[
-        ExternalSourceRecord
-    ]:
+    ) -> list[ExternalSourceRecord]:
         """按照可选条件列出外部资料。"""
         conditions: list[str] = []
         parameters: list[str] = []
 
         if ticker is not None:
-            cleaned_ticker = (
-                ticker.strip().upper()
-            )
+            cleaned_ticker = ticker.strip().upper()
 
             if not cleaned_ticker:
-                raise ValueError(
-                    "ticker不能为空字符串"
-                )
+                raise ValueError("ticker不能为空字符串")
 
-            conditions.append(
-                "ticker = ?"
-            )
-            parameters.append(
-                cleaned_ticker
-            )
+            conditions.append("ticker = ?")
+            parameters.append(cleaned_ticker)
 
         if status is not None:
-            cleaned_status = (
-                status.strip().lower()
-            )
+            cleaned_status = status.strip().lower()
 
-            if (
-                cleaned_status
-                not in VALID_EXTERNAL_STATUSES
-            ):
-                raise ValueError(
-                    "不支持的外部资料状态："
-                    f"{status}"
-                )
+            if cleaned_status not in VALID_EXTERNAL_STATUSES:
+                raise ValueError(f"不支持的外部资料状态：{status}")
 
-            conditions.append(
-                "status = ?"
-            )
-            parameters.append(
-                cleaned_status
-            )
+            conditions.append("status = ?")
+            parameters.append(cleaned_status)
 
         if project_id is not None:
-            cleaned_project_id = (
-                project_id.strip()
-            )
+            cleaned_project_id = project_id.strip()
 
             if not cleaned_project_id:
-                raise ValueError(
-                    "project_id不能为空字符串"
-                )
+                raise ValueError("project_id不能为空字符串")
 
-            conditions.append(
-                "project_id = ?"
-            )
-            parameters.append(
-                cleaned_project_id
-            )
+            conditions.append("project_id = ?")
+            parameters.append(cleaned_project_id)
 
-        sql = (
-            "SELECT * "
-            "FROM external_sources"
-        )
+        sql = "SELECT * FROM external_sources"
 
         if conditions:
-            sql += (
-                " WHERE "
-                + " AND ".join(
-                    conditions
-                )
-            )
+            sql += " WHERE " + " AND ".join(conditions)
 
-        sql += (
-            " ORDER BY "
-            "filing_date DESC, "
-            "source_id ASC"
-        )
+        sql += " ORDER BY filing_date DESC, source_id ASC"
 
         with self._connect() as connection:
             rows = connection.execute(
@@ -672,12 +540,7 @@ class ExternalSourceRegistry:
                 parameters,
             ).fetchall()
 
-        return [
-            ExternalSourceRecord(
-                **dict(row)
-            )
-            for row in rows
-        ]
+        return [ExternalSourceRecord(**dict(row)) for row in rows]
 
     def count_sources(
         self,

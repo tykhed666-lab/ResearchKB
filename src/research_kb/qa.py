@@ -1,26 +1,19 @@
 """基于Milvus检索证据生成有引用的回答。"""
 
-import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from research_kb.settings import DEFAULT_TOP_K
+from research_kb.evidence_context import build_evidence_context
 from research_kb.retrieval import (
     MilvusRetriever,
     RetrievalResult,
     RetrievalSourceMetadata,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-ENV_PATH = PROJECT_ROOT / ".env"
-
+from research_kb.settings import DEFAULT_TOP_K, require_environment
 
 # 这段规则约束模型如何使用证据，适用于任何行业资料。
 # 行业由用户上传的文档决定，不在系统提示词里固定。
@@ -44,22 +37,20 @@ SYSTEM_PROMPT = """
     不得直接相加、替换或混写成同一时期的结论。
 12. SEC 网页证据没有 PDF 页码，引用时按证据 ID 使用，
     不得虚构页码。
+13. 如果最终判断证据不足，不要引用仅用于排除、但不能直接回答问题的证据。
 """.strip()
 
 
 class ModelAnswer(BaseModel):
     """约束大模型必须返回的结构。"""
 
-    answer: str = Field(
-        description="依据证据生成的中文回答"
-    )
+    # Field 负责给BaseModel子类的每一个字段附加默认值，校验规则和描述信息
+    answer: str = Field(description="依据证据生成的中文回答")
     cited_evidence_ids: list[str] = Field(
         default_factory=list,
         description="回答实际引用的证据ID",
     )
-    insufficient_information: bool = Field(
-        description="现有证据是否不足以回答问题"
-    )
+    insufficient_information: bool = Field(description="现有证据是否不足以回答问题")
     missing_information: str | None = Field(
         default=None,
         description="证据不足时，说明缺少的信息",
@@ -94,25 +85,11 @@ class RAGQuestionAnswerer:
         if top_k <= 0:
             raise ValueError("top_k必须大于0")
 
-        load_dotenv(ENV_PATH)
-
-        api_key = os.getenv("OPENAI_API_KEY")
-        base_url = os.getenv("OPENAI_BASE_URL")
-        model_name = os.getenv("TEXT_MODEL")
-
-        missing_names = [
-            name
-            for name, value in (
-                ("OPENAI_API_KEY", api_key),
-                ("OPENAI_BASE_URL", base_url),
-                ("TEXT_MODEL", model_name),
-            )
-            if not value
-        ]
-
-        if missing_names:
-            missing_text = ", ".join(missing_names)
-            raise ValueError(f"缺少环境变量：{missing_text}")
+        api_key, base_url, model_name = require_environment(
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+            "TEXT_MODEL",
+        )
 
         self.retriever = retriever
         self.top_k = top_k
@@ -137,10 +114,7 @@ class RAGQuestionAnswerer:
         self,
         question: str,
         source: str | Sequence[str] | None = None,
-        source_metadata: (
-            Mapping[str, RetrievalSourceMetadata]
-            | None
-        ) = None,
+        source_metadata: (Mapping[str, RetrievalSourceMetadata] | None) = None,
     ) -> QAResult:
         """检索证据、生成回答并校验引用。
 
@@ -182,16 +156,32 @@ class RAGQuestionAnswerer:
         if model_answer.insufficient_information:
             # 复杂排版的一页可能被切成多个片段。
             # 首次证据不足时，补齐最高分证据所在页，并且只重试一次。
-            expanded_results = (
-                self.retriever.expand_top_result_page(
-                    query=question,
-                    results=retrieved_results,
-                )
+            expanded_results = self.retriever.expand_top_result_page(
+                query=question,
+                results=retrieved_results,
             )
 
             if len(expanded_results) > len(retrieved_results):
                 retrieved_results = expanded_results
 
+                model_answer = self._generate_model_answer(
+                    question=question,
+                    retrieved_results=retrieved_results,
+                )
+
+        if model_answer.insufficient_information:
+            # 同页补充仍无法回答时，再扩大一次召回范围。跨语言提问、
+            # 短标题页或术语密集的幻灯片，正确证据有时会落在前 5 名之后。
+            # 仅在模型明确判定证据不足时触发，避免增加正常问答的成本。
+            widened_results = self.retriever.search(
+                query=question,
+                top_k=self.top_k * 2,
+                source=source,
+                source_metadata=source_metadata,
+            )
+
+            if len(widened_results) > len(retrieved_results):
+                retrieved_results = widened_results
                 model_answer = self._generate_model_answer(
                     question=question,
                     retrieved_results=retrieved_results,
@@ -207,9 +197,7 @@ class RAGQuestionAnswerer:
             question=question,
             answer=model_answer.answer,
             citations=citations,
-            insufficient_information=(
-                model_answer.insufficient_information
-            ),
+            insufficient_information=(model_answer.insufficient_information),
             missing_information=model_answer.missing_information,
             retrieved_count=len(retrieved_results),
         )
@@ -228,7 +216,10 @@ class RAGQuestionAnswerer:
         Returns:
             符合 ModelAnswer 结构的模型输出。
         """
-        context = self._build_context(retrieved_results)
+        context = build_evidence_context(
+            retrieved_results,
+            include_score=True,
+        )
 
         user_prompt = f"""
 用户问题：
@@ -251,46 +242,9 @@ class RAGQuestionAnswerer:
         # 但传入 ModelAnswer 后，项目要求实际结果必须是 ModelAnswer。
         # 显式检查既消除编辑器警告，也防止模型接口异常时静默传递错误类型。
         if not isinstance(model_answer, ModelAnswer):
-            raise TypeError(
-                "结构化模型没有返回 ModelAnswer 类型"
-            )
+            raise TypeError("结构化模型没有返回 ModelAnswer 类型")
 
         return model_answer
-
-    @staticmethod
-    def _build_context(
-        results: list[RetrievalResult],
-    ) -> str:
-        """把检索结果转换成带ID的模型上下文。"""
-        evidence_blocks: list[str] = []
-
-        for result in results:
-            title = result.display_title or result.source
-            if result.source_type == "sec":
-                location = (
-                    "SEC官方原文："
-                    f"{result.source_url or '链接未提供'}"
-                )
-            else:
-                location = (
-                    f"PDF物理页码：{result.page_number}"
-                )
-            evidence_blocks.append(
-                "\n".join(
-                    [
-                        f"证据ID：{result.evidence_id}",
-                        f"证据类型：{result.content_type}",
-                        f"来源名称：{title}",
-                        f"来源类型：{result.source_type}",
-                        f"来源日期：{result.source_date or '未提供'}",
-                        location,
-                        f"相似度：{result.score:.4f}",
-                        f"正文：{result.text}",
-                    ]
-                )
-            )
-
-        return "\n\n---\n\n".join(evidence_blocks)
 
     @staticmethod
     def _validate_citations(
@@ -298,36 +252,24 @@ class RAGQuestionAnswerer:
         retrieved_results: list[RetrievalResult],
     ) -> tuple[RetrievalResult, ...]:
         """确认模型引用的ID来自本次检索结果。"""
-        result_by_id = {
-            result.evidence_id: result
-            for result in retrieved_results
-        }
+        result_by_id = {result.evidence_id: result for result in retrieved_results}
 
         # 保留引用顺序，同时去掉重复ID。
-        cited_ids = list(
-            dict.fromkeys(model_answer.cited_evidence_ids)
-        )
+        cited_ids = list(dict.fromkeys(model_answer.cited_evidence_ids))
 
         invalid_ids = [
-            evidence_id
-            for evidence_id in cited_ids
-            if evidence_id not in result_by_id
+            evidence_id for evidence_id in cited_ids if evidence_id not in result_by_id
         ]
 
         if invalid_ids:
-            raise CitationValidationError(
-                f"模型引用了不存在的证据ID：{invalid_ids}"
-            )
+            raise CitationValidationError(f"模型引用了不存在的证据ID：{invalid_ids}")
 
-        if (
-            not model_answer.insufficient_information
-            and not cited_ids
-        ):
-            raise CitationValidationError(
-                "模型认为信息充足，但没有返回证据ID"
-            )
+        # “没有找到答案”不能由不相关资料充当引用。
+        # 即使模型返回了排除性证据，界面也不把它展示为答案来源。
+        if model_answer.insufficient_information:
+            return ()
 
-        return tuple(
-            result_by_id[evidence_id]
-            for evidence_id in cited_ids
-        )
+        if not model_answer.insufficient_information and not cited_ids:
+            raise CitationValidationError("模型认为信息充足，但没有返回证据ID")
+
+        return tuple(result_by_id[evidence_id] for evidence_id in cited_ids)

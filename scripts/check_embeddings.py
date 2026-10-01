@@ -26,8 +26,7 @@ def main() -> None:
     # 遍历所有文档向量，检查维度是否正确
     # 如果全部正确，返回 True，否则返回 False
     dimensions_are_valid = all(
-        len(vector) == service.dimension
-        for vector in document_vectors
+        len(vector) == service.dimension for vector in document_vectors
     )
 
     print(f"全部文档向量维度正确：{dimensions_are_valid}")

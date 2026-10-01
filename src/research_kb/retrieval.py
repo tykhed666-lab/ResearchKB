@@ -64,10 +64,7 @@ class MilvusRetriever:
         query: str,
         top_k: int = DEFAULT_TOP_K,
         source: str | Sequence[str] | None = None,
-        source_metadata: (
-            Mapping[str, RetrievalSourceMetadata]
-            | None
-        ) = None,
+        source_metadata: (Mapping[str, RetrievalSourceMetadata] | None) = None,
     ) -> list[RetrievalResult]:
         """执行COSINE向量检索。
 
@@ -96,10 +93,7 @@ class MilvusRetriever:
             # 字符串本身也是 Sequence，
             # isinstance 是 Python 的内置函数，用来判断"一个对象是不是某种类型
             # 所以必须先单独判断 str。
-            if isinstance(source, str):
-                source_names = [source]
-            else:
-                source_names = list(source)
+            source_names = [source] if isinstance(source, str) else list(source)
 
             # 空列表表示页面没有选中任何文档。
             # 此时必须返回空结果，不能错误地搜索全库。
@@ -109,62 +103,36 @@ class MilvusRetriever:
             cleaned_source_names: list[str] = []
 
             for source_name in source_names:
-                cleaned_name = (
-                    source_name.strip()
-                )
+                cleaned_name = source_name.strip()
 
                 if not cleaned_name:
-                    raise ValueError(
-                        "source 过滤条件"
-                        "不能包含空字符串"
-                    )
+                    raise ValueError("source 过滤条件不能包含空字符串")
 
-                cleaned_source_names.append(
-                    cleaned_name
-                )
+                cleaned_source_names.append(cleaned_name)
 
             # dict.fromkeys 保留原顺序并去除重复文件名。
-            unique_source_names = list(
-                dict.fromkeys(
-                    cleaned_source_names
-                )
-            )
+            unique_source_names = list(dict.fromkeys(cleaned_source_names))
 
             escaped_source_names = [
-                source_name
-                .replace("\\", "\\\\")
-                .replace('"', '\\"')
-                for source_name
-                in unique_source_names
+                source_name.replace("\\", "\\\\").replace('"', '\\"')
+                for source_name in unique_source_names
             ]
 
             if len(escaped_source_names) == 1:
-                filter_expression = (
-                    'source == '
-                    f'"{escaped_source_names[0]}"'
-                )
+                filter_expression = f'source == "{escaped_source_names[0]}"'
 
             else:
                 # Milvus 的 in 表达式允许一次限定
                 # 多个 source 字段值。
                 quoted_sources = ", ".join(
-                    f'"{source_name}"'
-                    for source_name
-                    in escaped_source_names
+                    f'"{source_name}"' for source_name in escaped_source_names
                 )
 
-                filter_expression = (
-                    f"source in "
-                    f"[{quoted_sources}]"
-                )
+                filter_expression = f"source in [{quoted_sources}]"
 
         # 先完成来源校验。空来源列表会在上方直接返回，
         # 因此不会产生一次无意义的 Embedding 调用。
-        query_vector = (
-            self.embedding_service.embed_query(
-                query
-            )
-        )
+        query_vector = self.embedding_service.embed_query(query)
 
         search_response = self.store.client.search(
             collection_name=self.store.collection_name,
@@ -209,24 +177,14 @@ class MilvusRetriever:
                     content_type=entity["content_type"],
                     text=entity["text"],
                     source_type=(
-                        metadata.source_type
-                        if metadata is not None
-                        else "pdf"
+                        metadata.source_type if metadata is not None else "pdf"
                     ),
                     display_title=(
-                        metadata.display_title
-                        if metadata is not None
-                        else source_name
+                        metadata.display_title if metadata is not None else source_name
                     ),
-                    source_url=(
-                        metadata.source_url
-                        if metadata is not None
-                        else None
-                    ),
+                    source_url=(metadata.source_url if metadata is not None else None),
                     source_date=(
-                        metadata.source_date
-                        if metadata is not None
-                        else None
+                        metadata.source_date if metadata is not None else None
                     ),
                 )
             )
@@ -265,10 +223,7 @@ class MilvusRetriever:
         # 第一条结果相似度最高，用它的来源和页码确定需要补充的页面。
         top_result = results[0]
         # SEC 网页没有物理页码，不能套用 PDF 的同页补证据逻辑。
-        if (
-            top_result.source_type != "pdf"
-            or top_result.page_number <= 0
-        ):
+        if top_result.source_type != "pdf" or top_result.page_number <= 0:
             return results
         # 获取同页的其他片段
         page_records = self.store.get_page_records(
@@ -303,17 +258,12 @@ class MilvusRetriever:
             for record in page_records
         ]
 
-        page_evidence_ids = {
-            result.evidence_id
-            for result in page_results
-        }
+        page_evidence_ids = {result.evidence_id for result in page_results}
 
         # 同页片段按照页面顺序放在前面；原检索结果中属于其他页面的
         # 证据继续保留，避免丢失跨页信息。
         other_results = [
-            result
-            for result in results
-            if result.evidence_id not in page_evidence_ids
+            result for result in results if result.evidence_id not in page_evidence_ids
         ]
 
         return [*page_results, *other_results]
@@ -336,12 +286,8 @@ class MilvusRetriever:
             )
         )
 
-        first_norm = sqrt(
-            sum(value * value for value in first_vector)
-        )
-        second_norm = sqrt(
-            sum(value * value for value in second_vector)
-        )
+        first_norm = sqrt(sum(value * value for value in first_vector))
+        second_norm = sqrt(sum(value * value for value in second_vector))
 
         if first_norm == 0 or second_norm == 0:
             return 0.0

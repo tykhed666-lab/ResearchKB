@@ -1,17 +1,14 @@
 """把证据文本转换成向量并写入Milvus。"""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from collections.abc import Mapping
 
 from research_kb.chunker import EvidenceChunk
 from research_kb.embedding_service import EmbeddingService
 from research_kb.milvus_store import MilvusStore
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+from research_kb.settings import RAW_DATA_DIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,10 +65,7 @@ class EvidenceIndexer:
         self,
         chunks: list[EvidenceChunk],
         batch_size: int = 10,
-        source_file_paths: (
-            Mapping[str, str | Path]
-            | None
-        ) = None,
+        source_file_paths: (Mapping[str, str | Path] | None) = None,
     ) -> IndexingReport:
         """批量把证据写入Milvus。
 
@@ -103,10 +97,7 @@ class EvidenceIndexer:
         self.store.load_collection()
 
         explicit_paths = {
-            source: Path(path)
-            for source, path in (
-                source_file_paths or {}
-            ).items()
+            source: Path(path) for source, path in (source_file_paths or {}).items()
         }
 
         # 每个来源只计算一次文件哈希。旧 PDF 调用保持兼容，
@@ -129,29 +120,21 @@ class EvidenceIndexer:
         skipped_count = 0
 
         for start_index in range(0, len(chunks), batch_size):
-            batch = chunks[start_index:start_index + batch_size]
+            batch = chunks[start_index : start_index + batch_size]
 
             existing_ids = self.store.get_existing_ids(
-                [
-                    chunk.evidence_id
-                    for chunk in batch
-                ]
+                [chunk.evidence_id for chunk in batch]
             )
 
             pending_chunks = [
-                chunk
-                for chunk in batch
-                if chunk.evidence_id not in existing_ids
+                chunk for chunk in batch if chunk.evidence_id not in existing_ids
             ]
 
             skipped_count += len(batch) - len(pending_chunks)
 
             if pending_chunks:
                 vectors = self.embedding_service.embed_documents(
-                    [
-                        chunk.text
-                        for chunk in pending_chunks
-                    ],
+                    [chunk.text for chunk in pending_chunks],
                     batch_size=batch_size,
                 )
 

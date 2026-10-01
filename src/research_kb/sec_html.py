@@ -1,7 +1,7 @@
 """把 SEC 主 HTML 转换成适合向量检索的正文证据。"""
 
-from html.parser import HTMLParser
 import re
+from html.parser import HTMLParser
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -17,19 +17,40 @@ from research_kb.settings import (
     DEFAULT_CHUNK_SIZE,
 )
 
-
 BLOCK_TAGS = frozenset(
     {
-        "address", "article", "br", "caption", "div",
-        "footer", "h1", "h2", "h3", "h4", "h5", "h6",
-        "header", "li", "main", "p", "section", "table",
-        "td", "th", "tr", "ul", "ol",
+        "address",
+        "article",
+        "br",
+        "caption",
+        "div",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "li",
+        "main",
+        "p",
+        "section",
+        "table",
+        "td",
+        "th",
+        "tr",
+        "ul",
+        "ol",
     }
 )
 
 IGNORED_TAGS = frozenset(
     {
-        "script", "style", "noscript", "template",
+        "script",
+        "style",
+        "noscript",
+        "template",
         # Inline XBRL 的隐藏区含大量重复机器数据，
         # 用户在网页中看不到，不应重复进入检索。
         "ix:hidden",
@@ -50,10 +71,7 @@ class _VisibleTextParser(HTMLParser):
         tag: str,
         attrs: list[tuple[str, str | None]],
     ) -> bool:
-        attributes = {
-            name.lower(): (value or "").lower()
-            for name, value in attrs
-        }
+        attributes = {name.lower(): (value or "").lower() for name, value in attrs}
         style = attributes.get("style", "").replace(" ", "")
         return (
             tag in IGNORED_TAGS
@@ -146,9 +164,7 @@ def split_sec_text_into_chunks(
     if chunk_size <= 0:
         raise ValueError("chunk_size 必须大于 0")
     if chunk_overlap < 0 or chunk_overlap >= chunk_size:
-        raise ValueError(
-            "chunk_overlap 必须大于等于 0，并且小于 chunk_size"
-        )
+        raise ValueError("chunk_overlap 必须大于等于 0，并且小于 chunk_size")
     if max_chunks <= 0:
         raise ValueError("max_chunks 必须大于 0")
 
